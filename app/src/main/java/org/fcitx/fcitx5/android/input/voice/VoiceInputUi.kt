@@ -58,6 +58,9 @@ class VoiceInputUi(val ctx: Context, private val theme: Theme) {
 
     private val transcriptScroll = ScrollView(ctx).apply {
         isVerticalScrollBarEnabled = false
+        // keep long transcripts inside their own area, never under the status line
+        clipToPadding = true
+        isFillViewport = true
         addView(transcriptText, FrameLayout.LayoutParams(-1, -2))
     }
 
@@ -100,7 +103,6 @@ class VoiceInputUi(val ctx: Context, private val theme: Theme) {
     }
 
     private val micContainer = FrameLayout(ctx).apply {
-        clipChildren = false
         addView(halo, FrameLayout.LayoutParams(dp(96), dp(96), Gravity.CENTER))
         addView(micButton, FrameLayout.LayoutParams(dp(68), dp(68), Gravity.CENTER))
     }
@@ -124,7 +126,6 @@ class VoiceInputUi(val ctx: Context, private val theme: Theme) {
     private val controls = LinearLayout(ctx).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        clipChildren = false
         addView(backspaceButton, LinearLayout.LayoutParams(dp(52), dp(52)))
         addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f))
         addView(micContainer, LinearLayout.LayoutParams(dp(100), dp(100)))
@@ -143,7 +144,6 @@ class VoiceInputUi(val ctx: Context, private val theme: Theme) {
         }
     }.apply {
         orientation = LinearLayout.VERTICAL
-        clipChildren = false
         setPadding(0, dp(8), 0, 0)
         addView(statusText, LinearLayout.LayoutParams(-1, -2).apply {
             setMargins(dp(16), 0, dp(16), 0)
