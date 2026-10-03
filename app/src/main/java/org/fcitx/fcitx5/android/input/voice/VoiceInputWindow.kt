@@ -6,6 +6,7 @@ package org.fcitx.fcitx5.android.input.voice
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
 import org.fcitx.fcitx5.android.R
@@ -151,16 +152,30 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
         )
     }
 
+    private var finishingSince = 0L
+
     /**
-     * Keep the recognizer bound (model loaded, instant restart) for a while after the panel is
-     * closed or hidden, then let it go so the `:voice` process frees the model.
+     * Unbind shortly after the panel is closed or hidden. While bound (BIND_IMPORTANT) the
+     * `:voice` process runs at the keyboard's priority and can't be reclaimed; once unbound it
+     * becomes a cached process that the system freezes, keeping the model loaded for free
+     * until memory is needed. The short delay just coalesces quick hide/show flickers.
      */
-    private val idleUnbind = Runnable {
-        if (attached && visible) return@Runnable
-        if (state == State.Listening || state == State.Loading) return@Runnable
-        // also covers a recognizer that never answered MSG_STOP
-        if (state == State.Finishing) toIdle()
-        client.unbind()
+    private val idleUnbind: Runnable = object : Runnable {
+        override fun run() {
+            if (attached && visible) return
+            if (state == State.Listening || state == State.Loading) return
+            if (state == State.Finishing &&
+                SystemClock.elapsedRealtime() - finishingSince < FINISH_TIMEOUT_MS
+            ) {
+                // a long final decode (Qwen3 on CPU, or a model still loading) is still running,
+                // unbinding now would throw its result away
+                mainHandler.postDelayed(this, IDLE_UNBIND_DELAY_MS)
+                return
+            }
+            // also covers a recognizer that never answered MSG_STOP
+            if (state == State.Finishing) toIdle()
+            client.unbind()
+        }
     }
 
     private fun scheduleIdleUnbind() {
@@ -242,6 +257,7 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
         val pending = capture.stop { mainHandler.post { client.stop(id) } }
         if (client.isSessionActive) {
             state = State.Finishing
+            finishingSince = SystemClock.elapsedRealtime()
             ui.setMicState(VoiceInputUi.MicState.Loading)
             ui.statusText.setText(R.string.voice_status_finishing)
             if (!pending) client.stop(id)
@@ -318,7 +334,8 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
     }
 
     companion object {
-        private const val IDLE_UNBIND_DELAY_MS = 60_000L
+        private const val IDLE_UNBIND_DELAY_MS = 10_000L
+        private const val FINISH_TIMEOUT_MS = 60_000L
     }
 
 }

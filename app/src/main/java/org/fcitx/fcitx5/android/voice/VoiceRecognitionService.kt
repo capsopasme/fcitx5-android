@@ -70,11 +70,10 @@ class VoiceRecognitionService : Service() {
             resetSession()
             vad?.release()
             vad = null
-            // Clients keep their binding for a grace period after the panel is closed (that's what
-            // keeps re-opening instant), so getting here means voice input has been idle for a while.
-            // Free the model now: once unbound this process is cached and frozen, and would otherwise
-            // pin hundreds of MB (plus the QNN context on the DSP) until the low memory killer comes.
-            releaseEngine()
+            // Keep the engine: once unbound this process is cached and frozen by the system, so the
+            // loaded model costs no CPU and no power (DRAM refresh doesn't care whether pages are
+            // used), and it is the first thing lmkd kills when memory is actually needed. Releasing
+            // it here would only make the next start pay for re-loading the model.
         }
         workerThread.quitSafely()
         super.onDestroy()
