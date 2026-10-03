@@ -1,0 +1,127 @@
+name: Voice Input APK
+
+# Builds fcitx5-android with the built-in offline voice input (sherpa-onnx + Qualcomm QNN)
+# for arm64-v8a. Run it from the "Actions" tab -> "Voice Input APK" -> "Run workflow".
+#
+# Optional repository secrets (Settings -> Secrets and variables -> Actions) for a stable signature:
+#   SIGN_KEY_BASE64  base64 of a .jks keystore
+#   SIGN_KEY_ALIAS   key alias
+#   SIGN_KEY_PWD     keystore / key password
+# Without them a throw-away key is generated, and you can't install the next build over it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugins:
+        description: "Also build these plugins with the same signature, space separated (e.g. rime anthy). Leave empty for none."
+        required: false
+        default: ""
+  push:
+    branches: [voice-input]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fetch source code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Apply voice input patch
+        run: |
+          if [ ! -f voice-input.patch ]; then
+            echo "voice-input.patch not found, assuming the source tree is already patched"
+          elif git apply --reverse --check voice-input.patch 2>/dev/null; then
+            echo "Patch already applied"
+          else
+            git apply --3way --whitespace=nowarn voice-input.patch
+            echo "Patch applied"
+          fi
+          test -f app/src/main/java/org/fcitx/fcitx5/android/voice/VoiceEngine.kt
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android environment
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK and CMake
+        run: |
+          NDK_VERSION=$(grep 'defaultNDK' build-logic/convention/src/main/kotlin/Versions.kt | sed 's/.*"\(.*\)".*/\1/')
+          CMAKE_VERSION=$(grep 'defaultCMake' build-logic/convention/src/main/kotlin/Versions.kt | sed 's/.*"\(.*\)".*/\1/')
+          echo "NDK $NDK_VERSION, CMake $CMAKE_VERSION"
+          sdkmanager --install "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION"
+          echo "ANDROID_NDK=${ANDROID_HOME:-$ANDROID_SDK_ROOT}/ndk/$NDK_VERSION" >> $GITHUB_ENV
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y extra-cmake-modules gettext
+
+      - name: Cache sherpa-onnx build
+        uses: actions/cache@v5
+        with:
+          path: |
+            build/voice-native/sherpa-libs-*
+            build/voice-native/qnn-libs-*
+          key: voice-native-${{ hashFiles('voice/prepare-native.sh') }}
+
+      - name: Build sherpa-onnx with QNN
+        run: |
+          chmod +x voice/prepare-native.sh
+          ./voice/prepare-native.sh
+
+      - name: Prepare signing key
+        env:
+          SIGN_KEY_BASE64: ${{ secrets.SIGN_KEY_BASE64 }}
+          SIGN_KEY_ALIAS: ${{ secrets.SIGN_KEY_ALIAS }}
+          SIGN_KEY_PWD: ${{ secrets.SIGN_KEY_PWD }}
+        run: |
+          if [ -n "$SIGN_KEY_BASE64" ]; then
+            echo "Using signing key from secrets"
+            echo "SIGN_KEY_BASE64=$SIGN_KEY_BASE64" >> $GITHUB_ENV
+            echo "SIGN_KEY_ALIAS=$SIGN_KEY_ALIAS" >> $GITHUB_ENV
+            echo "SIGN_KEY_PWD=$SIGN_KEY_PWD" >> $GITHUB_ENV
+          else
+            echo "::warning::No SIGN_KEY_BASE64 secret, generating a temporary signing key"
+            keytool -genkeypair -v -keystore temp.jks -alias temp -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass temp123456 -keypass temp123456 \
+              -dname "CN=fcitx5-android voice"
+            echo "SIGN_KEY_BASE64=$(base64 -w0 temp.jks)" >> $GITHUB_ENV
+            echo "SIGN_KEY_ALIAS=temp" >> $GITHUB_ENV
+            echo "SIGN_KEY_PWD=temp123456" >> $GITHUB_ENV
+          fi
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build release APK (arm64-v8a)
+        env:
+          BUILD_ABI: arm64-v8a
+        run: ./gradlew :app:assembleRelease
+
+      - name: Build plugins
+        if: ${{ github.event.inputs.plugins != '' && github.event.inputs.plugins != null }}
+        env:
+          BUILD_ABI: arm64-v8a
+          PLUGINS: ${{ github.event.inputs.plugins }}
+        run: |
+          mkdir -p plugin-apks
+          for p in $PLUGINS; do
+            ./gradlew ":plugin:$p:assembleRelease"
+            cp -v plugin/$p/build/outputs/apk/release/*.apk plugin-apks/
+          done
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcitx5-android-voice-arm64-v8a
+          path: |
+            app/build/outputs/apk/release/*.apk
+            plugin-apks/*.apk
+          if-no-files-found: error
