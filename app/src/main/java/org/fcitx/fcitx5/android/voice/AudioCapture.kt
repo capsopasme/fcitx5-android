@@ -18,20 +18,32 @@ import kotlin.math.sqrt
 /**
  * Captures 16 kHz mono microphone audio on a background thread.
  * [onAudio] receives float samples in [-1, 1] and the chunk's RMS level, on the capture thread.
+ *
+ * Every [start] gets its own worker with its own running flag: a quick stop() + start()
+ * can never leave two threads feeding the same session, and the old thread's cleanup
+ * can never stop the new one.
  */
 class AudioCapture(
     private val onAudio: (pcm: FloatArray, rms: Float) -> Unit,
     private val onFailure: (Throwable) -> Unit,
 ) {
-    @Volatile
-    private var running = false
-    private var thread: Thread? = null
+    private class Worker {
+        @Volatile
+        var running = true
 
-    val isRunning get() = running
+        /** set by [stop], invoked on the capture thread after the last [onAudio] */
+        @Volatile
+        var onStopped: (() -> Unit)? = null
+    }
+
+    @Volatile
+    private var current: Worker? = null
+
+    val isRunning get() = current?.running == true
 
     @SuppressLint("MissingPermission")
     fun start(context: Context): Boolean {
-        if (running) return true
+        if (isRunning) return true
         if (!hasPermission(context)) return false
         val rate = VoiceProtocol.SAMPLE_RATE
         val minBuf = AudioRecord.getMinBufferSize(
@@ -58,16 +70,27 @@ class AudioCapture(
             onFailure(IllegalStateException("AudioRecord not initialized"))
             return false
         }
-        running = true
-        thread = Thread({
+        val worker = Worker()
+        current = worker
+        Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             val chunk = ShortArray(rate / 10) // 100ms
+            var emptyReads = 0
             try {
                 record.startRecording()
-                while (running) {
+                if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    throw IllegalStateException("AudioRecord failed to start (microphone busy?)")
+                }
+                while (worker.running) {
                     val n = record.read(chunk, 0, chunk.size)
                     if (n < 0) throw IllegalStateException("AudioRecord.read=$n")
-                    if (n == 0) continue
+                    if (n == 0) {
+                        // a blocking read should never return 0; don't spin the CPU if it does
+                        if (++emptyReads > 20) throw IllegalStateException("AudioRecord returns no data")
+                        Thread.sleep(10)
+                        continue
+                    }
+                    emptyReads = 0
                     val pcm = FloatArray(n)
                     var sum = 0.0
                     for (i in 0 until n) {
@@ -75,26 +98,39 @@ class AudioCapture(
                         pcm[i] = v
                         sum += v * v
                     }
-                    if (running) onAudio(pcm, sqrt(sum / n).toFloat())
+                    // also deliver the chunk read right after stop(): it is the tail of the speech
+                    onAudio(pcm, sqrt(sum / n).toFloat())
                 }
             } catch (e: Throwable) {
                 Log.w("AudioCapture", "capture failed", e)
-                if (running) onFailure(e)
+                if (worker.running) onFailure(e)
             } finally {
-                running = false
+                worker.running = false
                 try {
                     record.stop()
                 } catch (_: IllegalStateException) {
                 }
                 record.release()
+                if (current === worker) current = null
             }
-        }, "voice-capture").apply { start() }
+            // non-null only if stop() was called; runs even if the last read failed
+            worker.onStopped?.invoke()
+        }, "voice-capture").start()
         return true
     }
 
-    fun stop() {
-        running = false
-        thread = null
+    /**
+     * Asynchronous: the capture thread finishes its current read (<= 100ms), delivers it,
+     * releases the microphone and then calls [onStopped] on the capture thread.
+     *
+     * @return false if nothing was being captured, [onStopped] will not be called then
+     */
+    fun stop(onStopped: (() -> Unit)? = null): Boolean {
+        val w = current ?: return false
+        current = null
+        w.onStopped = onStopped
+        w.running = false
+        return true
     }
 
     companion object {

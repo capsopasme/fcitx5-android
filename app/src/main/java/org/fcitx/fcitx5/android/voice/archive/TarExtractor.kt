@@ -6,6 +6,7 @@ package org.fcitx.fcitx5.android.voice.archive
 
 import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 
@@ -112,7 +113,8 @@ object TarExtractor {
                 isFile && name.isNotEmpty() && filter.accept(name) -> {
                     target.parentFile?.mkdirs()
                     var left = size
-                    target.outputStream().buffered(1 shl 16).use { out ->
+                    // buffer is already 64 KiB, write it straight through
+                    FileOutputStream(target).use { out ->
                         while (left > 0) {
                             if (isCancelled()) throw InterruptedException("cancelled")
                             val n = input.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
@@ -122,6 +124,9 @@ object TarExtractor {
                             consumed += n
                             progress?.onProgress(consumed)
                         }
+                        // make the data durable before the directory is renamed into place,
+                        // so a power loss can't leave an "installed" model with truncated files
+                        out.fd.sync()
                     }
                     skip(input, padded - size)
                     consumed += padded - size

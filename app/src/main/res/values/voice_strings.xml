@@ -34,6 +34,7 @@
     <string name="voice_error_qnn_soc">The NPU model is built for Snapdragon 8 Gen 3 (SM8650), this device is %1$s. Please use a CPU model.</string>
     <string name="voice_error_qnn_libs">QNN runtime libraries are not packaged in this build: %1$s</string>
     <string name="voice_error_no_test_wav">No test audio found in the model folder</string>
+    <string name="voice_error_interrupted">Interrupted by another voice session (e.g. the self test)</string>
     <string name="voice_permission_granted">Microphone permission granted</string>
     <string name="voice_permission_denied_forever">Please allow the microphone permission in app settings</string>
 

@@ -6,6 +6,7 @@ package org.fcitx.fcitx5.android.voice
 
 import android.content.Context
 import android.net.Uri
+import android.os.StatFs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,7 +60,28 @@ object VoiceModelManager {
     fun modelDir(ctx: Context, model: SpeechModel) = File(rootDir(ctx), model.dirName)
 
     fun isInstalled(ctx: Context, model: SpeechModel) =
-        model.requiredFiles.all { File(modelDir(ctx, model), it).isFile }
+        model.requiredFiles.all { File(modelDir(ctx, model), it).let { f -> f.isFile && f.length() > 0 } }
+
+    /**
+     * Refuse to start when the model can't fit: filling internal storage up to the last byte
+     * hurts the whole system (and flash wear, through f2fs garbage collection), and every byte
+     * written before the inevitable failure is wasted.
+     */
+    private fun checkFreeSpace(dir: File, archiveBytes: Long) {
+        if (archiveBytes <= 0) return
+        dir.mkdirs()
+        // extracted size is roughly the archive size (bz2 barely compresses int8 weights)
+        val needed = archiveBytes + archiveBytes / 4 + FREE_SPACE_MARGIN
+        val available = StatFs(dir.path).availableBytes
+        if (available < needed) {
+            throw IOException(
+                "Not enough storage: need ${needed / MB} MB, ${available / MB} MB available"
+            )
+        }
+    }
+
+    private const val MB = 1024L * 1024L
+    private const val FREE_SPACE_MARGIN = 256 * MB
 
     private fun dirSize(f: File): Long =
         if (f.isFile) f.length() else f.listFiles()?.sumOf { dirSize(it) } ?: 0L
@@ -74,6 +96,7 @@ object VoiceModelManager {
 
     /** Re-scan disk, keeping states of running jobs */
     fun refresh(ctx: Context) {
+        cleanupStaleTemp(ctx)
         SpeechModel.entries.forEach { m ->
             if (jobs[m]?.isActive == true) return@forEach
             val old = _states.value[m]
@@ -86,8 +109,36 @@ object VoiceModelManager {
 
     fun isBusy(model: SpeechModel) = jobs[model]?.isActive == true
 
+    /**
+     * The job stays in [jobs] until it has really finished (it may be blocked in a network read
+     * for a while), so that a new download of the same model can wait for it instead of both
+     * writing to - and deleting - the same temp directory.
+     */
     fun cancel(model: SpeechModel) {
-        jobs.remove(model)?.cancel()
+        jobs[model]?.cancel()
+    }
+
+    /**
+     * A download interrupted by process death leaves up to ~1 GB in a temp directory that
+     * nothing would ever clean up unless the same model is downloaded again.
+     */
+    private fun cleanupStaleTemp(ctx: Context) {
+        rootDir(ctx).listFiles()?.forEach { f ->
+            val stale = when {
+                f.name == ".tmp-import" -> importJob?.isActive != true
+                f.name.startsWith(".tmp-") -> {
+                    val m = SpeechModel.fromDirName(f.name.removePrefix(".tmp-"))
+                    m == null || jobs[m]?.isCompleted != false
+                }
+                // half-copied VAD model; the voice process may be writing it right now
+                f.name.endsWith(".tmp") -> System.currentTimeMillis() - f.lastModified() > 60_000L
+                else -> false
+            }
+            if (stale) {
+                Timber.i("Removing stale ${f.name}")
+                f.deleteRecursively()
+            }
+        }
     }
 
     fun delete(ctx: Context, model: SpeechModel) {
@@ -108,18 +159,25 @@ object VoiceModelManager {
             else if (p.contains("{url}")) p.replace("{url}", model.defaultUrl)
             else p + model.defaultUrl
         }
+        val previous = jobs[model]
         jobs[model] = scope.launch {
+            // a cancelled download of the same model may still be winding down
+            previous?.join()
             setState(model, State.Working(Phase.Download, 0, model.downloadSizeMb * 1024L * 1024L))
             val tmp = File(rootDir(appCtx), ".tmp-${model.dirName}")
+            var conn: HttpURLConnection? = null
             try {
                 tmp.deleteRecursively()
+                checkFreeSpace(rootDir(appCtx), model.downloadSizeMb * MB)
                 tmp.mkdirs()
                 Timber.i("Downloading speech model from $url")
-                val conn = openConnection(url)
-                val total = conn.contentLengthLong.takeIf { it > 0 }
-                    ?: (model.downloadSizeMb * 1024L * 1024L)
+                val c = openConnection(url)
+                conn = c
+                val total = c.contentLengthLong.takeIf { it > 0 }
+                    ?: (model.downloadSizeMb * MB)
+                checkFreeSpace(rootDir(appCtx), total)
                 val job = coroutineContext[Job]
-                conn.inputStream.use { raw ->
+                c.inputStream.use { raw ->
                     val counting = CountingInputStream(raw) { read ->
                         setState(model, State.Working(Phase.Download, read, total))
                     }
@@ -129,7 +187,6 @@ object VoiceModelManager {
                         isCancelled = { job?.isActive != true }
                     )
                 }
-                conn.disconnect()
                 installFromTmp(appCtx, tmp, model)
                 setState(model, diskState(appCtx, model))
             } catch (e: Throwable) {
@@ -141,7 +198,8 @@ object VoiceModelManager {
                     setState(model, diskState(appCtx, model))
                 }
             } finally {
-                jobs.remove(model)
+                conn?.disconnect()
+                coroutineContext[Job]?.let { jobs.remove(model, it) }
             }
         }
     }
@@ -160,6 +218,7 @@ object VoiceModelManager {
                 tmp.mkdirs()
                 val total = appCtx.contentResolver.openAssetFileDescriptor(uri, "r")
                     ?.use { it.length }?.takeIf { it > 0 } ?: -1L
+                checkFreeSpace(rootDir(appCtx), total)
                 _importState.value = State.Working(Phase.Import, 0, total)
                 val job = coroutineContext[Job]
                 val input = appCtx.contentResolver.openInputStream(uri)
