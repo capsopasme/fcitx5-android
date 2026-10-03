@@ -25,6 +25,7 @@ import splitties.dimensions.dp
 import splitties.views.dsl.core.add
 import splitties.views.dsl.core.horizontalLayout
 import splitties.views.dsl.core.lParams
+import timber.log.Timber
 
 /**
  * Built-in offline voice input panel, opened from the toolbar microphone button.
@@ -72,7 +73,7 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
                     scheduleIdleUnbind()
                 } else if (attached) {
                     mainHandler.removeCallbacks(idleUnbind)
-                    if (isReady()) client.bind()
+                    if (isReady()) preloadModel()
                 }
             }
         }
@@ -100,6 +101,17 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
 
         override fun onFinal(text: String) {
             partial = ""
+            if (service.editorGeneration != sessionEditor) {
+                // Focus moved to another field / app while the last sentence was still being
+                // decoded (the panel stops listening when it's detached or hidden, but the result
+                // arrives later). Committing now would put it into the wrong editor - possibly a
+                // password field, where this panel is never offered.
+                Timber.i("Dropping voice result: the editor changed")
+                droppedResult = true
+                if (attached) ui.statusText.setText(R.string.voice_status_dropped_editor_changed)
+                ui.showTranscript(committed, partial)
+                return
+            }
             val out = postProcess(text)
             if (out.isNotEmpty()) {
                 service.commitText(out)
@@ -119,7 +131,8 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
         override fun onDone() {
             capture.stop()
             toIdle()
-            if (attached) ui.statusText.setText(R.string.voice_status_idle)
+            // keep the "not inserted" notice visible instead of replacing it
+            if (attached && !droppedResult) ui.statusText.setText(R.string.voice_status_idle)
             if (!attached || !visible) scheduleIdleUnbind()
         }
 
@@ -154,6 +167,12 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
 
     private var finishingSince = 0L
 
+    /** [FcitxInputMethodService.editorGeneration] when listening started */
+    private var sessionEditor = -1
+
+    /** a result of the current session was dropped because the editor changed */
+    private var droppedResult = false
+
     /**
      * Unbind shortly after the panel is closed or hidden. While bound (BIND_IMPORTANT) the
      * `:voice` process runs at the keyboard's priority and can't be reclaimed; once unbound it
@@ -185,6 +204,21 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
 
     private fun isReady() =
         AudioCapture.hasPermission(context) && VoiceModelManager.isInstalled(context, prefs.model.getValue())
+
+    /**
+     * Bind and have the recognizer load the model now, while the user is still looking at the
+     * panel, so that the first sentence doesn't wait for it (seconds for a cold QNN context or
+     * Qwen3-ASR). Cheap when the model is already loaded in the cached process.
+     */
+    private fun preloadModel() {
+        if (state != State.Idle) return
+        client.preload(
+            model = prefs.model.getValue(),
+            language = prefs.language.getValue(),
+            itn = prefs.itn.getValue(),
+            silenceMs = prefs.silenceMillis.getValue(),
+        )
+    }
 
     private fun toIdle() {
         state = State.Idle
@@ -233,6 +267,8 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
             if (!isEmpty()) focusOutIn()
         }
         partial = ""
+        sessionEditor = service.editorGeneration
+        droppedResult = false
         state = State.Loading
         ui.setMicState(VoiceInputUi.MicState.Loading)
         ui.statusText.setText(R.string.voice_status_starting)
@@ -317,12 +353,11 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
         ui.setMicState(VoiceInputUi.MicState.Idle)
         ui.statusText.setText(R.string.voice_status_idle)
         val ready = isReady()
-        if (ready) {
-            // connect early so that the recognizer process (and the model) is warm
-            client.bind()
-        }
         if (prefs.autoStart.getValue() || !ready) {
+            // starting loads the model anyway
             startListening()
+        } else {
+            preloadModel()
         }
     }
 

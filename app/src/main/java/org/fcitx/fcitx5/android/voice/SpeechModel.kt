@@ -31,6 +31,11 @@ enum class SpeechModel(
     val fastEnoughForPartial: Boolean,
     /** Test wav files (relative to [dirName]) kept after extraction, used by the self test */
     val testWav: String,
+    /**
+     * Keep the model loaded in the cached recognizer process after the panel closes.
+     * Off for large models, whose resident memory would evict many other cached apps.
+     */
+    val keepLoadedWhenIdle: Boolean = true,
 ) : ManagedPreferenceEnum {
 
     /**
@@ -80,6 +85,7 @@ enum class SpeechModel(
         maxSegmentSeconds = 25f,
         fastEnoughForPartial = false,
         testWav = "test_wavs/codeswitch.wav",
+        keepLoadedWhenIdle = false,
     );
 
     val defaultUrl: String

@@ -57,6 +57,9 @@ object VoiceModelManager {
 
     fun rootDir(ctx: Context) = File(ctx.filesDir, "voice-models")
 
+    /** VAD model copied out of the APK by the recognizer process, see [VoiceEngine.createVad] */
+    const val VAD_FILE_NAME = "silero_vad.onnx"
+
     fun modelDir(ctx: Context, model: SpeechModel) = File(rootDir(ctx), model.dirName)
 
     fun isInstalled(ctx: Context, model: SpeechModel) =
@@ -132,6 +135,10 @@ object VoiceModelManager {
                 }
                 // half-copied VAD model; the voice process may be writing it right now
                 f.name.endsWith(".tmp") -> System.currentTimeMillis() - f.lastModified() > 60_000L
+                // a model directory this version doesn't know any more: an app update replaced
+                // that model with a newer release (different directory name). Nothing would ever
+                // load or delete it, it would just keep hundreds of MB of flash forever.
+                f.isDirectory -> SpeechModel.fromDirName(f.name) == null
                 else -> false
             }
             if (stale) {

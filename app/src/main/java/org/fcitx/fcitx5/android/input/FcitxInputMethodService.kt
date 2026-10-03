@@ -120,6 +120,14 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
 
     private var capabilityFlags = CapabilityFlags.DefaultFlags
 
+    /**
+     * Incremented whenever input starts in a different editor (focus moved to another field or
+     * another app; not on restarts of the same editor). Lets asynchronous producers of text, like
+     * voice input, tell whether the editor they started in is still the one being edited.
+     */
+    var editorGeneration = 0
+        private set
+
     private val selection = CursorTracker()
 
     val currentInputSelection: CursorRange
@@ -725,6 +733,7 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onStartInput(attribute: EditorInfo, restarting: Boolean) {
+        if (!restarting) editorGeneration++
         // update selection as soon as possible
         // sometimes when restarting input, onUpdateSelection happens before onStartInput, and
         // initialSel{Start,End} is outdated. but it's the client app's responsibility to send

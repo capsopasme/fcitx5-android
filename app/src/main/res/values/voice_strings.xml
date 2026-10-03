@@ -50,6 +50,7 @@
     <string name="voice_status_idle">Tap the microphone to speak</string>
     <string name="voice_status_error">Error: %1$s</string>
     <string name="voice_status_crashed">The recognizer process crashed (NPU initialization failed?). Try the CPU model.</string>
+    <string name="voice_status_dropped_editor_changed">The input field changed before recognition finished, the last sentence was not inserted</string>
     <string name="voice_status_need_permission">Microphone permission is required</string>
     <string name="voice_status_need_model">Model not installed: %1$s</string>
     <string name="voice_open_settings">Voice settings</string>
