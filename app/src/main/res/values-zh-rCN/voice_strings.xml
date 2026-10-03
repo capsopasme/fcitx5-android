@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ SPDX-License-Identifier: LGPL-2.1-or-later
+  ~ SPDX-FileCopyrightText: Copyright 2026 Fcitx5 for Android Contributors
+  -->
+<resources>
+    <string name="voice_input">语音输入</string>
+    <string name="voice_show_toolbar_button">在工具栏显示麦克风按钮</string>
+    <string name="voice_model">识别模型</string>
+    <string name="voice_language">语言</string>
+    <string name="voice_itn">自动标点与数字格式化</string>
+    <string name="voice_itn_summary">自动加标点，并把读出来的数字转成阿拉伯数字（逆文本正则化）</string>
+    <string name="voice_partial_results">边说边显示</string>
+    <string name="voice_partial_results_summary">说话过程中实时刷新当前句；停顿后整句上屏</string>
+    <string name="voice_auto_start">打开面板后自动开始聆听</string>
+    <string name="voice_silence_duration">断句停顿时长</string>
+    <string name="voice_auto_space">英文单词间自动加空格</string>
+    <string name="voice_auto_space_summary">英文紧跟在英文后面时自动补一个空格</string>
+    <string name="voice_drop_trailing_period">去掉句末句号</string>
+
+    <string name="voice_model_sense_voice_qnn">SenseVoice · 高通 NPU（QNN，骁龙 8 Gen 3）</string>
+    <string name="voice_model_sense_voice_cpu">SenseVoice · CPU</string>
+    <string name="voice_model_qwen3_asr">Qwen3-ASR 0.6B · CPU（最准，较慢）</string>
+
+    <string name="voice_lang_auto">自动（中英混说）</string>
+    <string name="voice_lang_zh">普通话</string>
+    <string name="voice_lang_en">英语</string>
+    <string name="voice_lang_yue">粤语</string>
+    <string name="voice_lang_ja">日语</string>
+    <string name="voice_lang_ko">韩语</string>
+
+    <string name="voice_error_model_missing">模型文件缺失：%1$s</string>
+    <string name="voice_error_init_failed">模型加载失败。%1$s</string>
+    <string name="voice_error_qnn_soc">NPU 模型是为骁龙 8 Gen 3（SM8650）编译的，本机是 %1$s，请改用 CPU 模型。</string>
+    <string name="voice_error_qnn_libs">此版本未打包 QNN 运行库：%1$s</string>
+    <string name="voice_error_no_test_wav">模型目录里没有测试音频</string>
+    <string name="voice_permission_granted">已获得麦克风权限</string>
+    <string name="voice_permission_denied_forever">请在应用设置中允许麦克风权限</string>
+
+    <string name="voice_backspace">退格</string>
+    <string name="voice_enter">回车</string>
+    <string name="voice_start">开始聆听</string>
+    <string name="voice_stop">停止聆听</string>
+
+    <string name="voice_status_starting">正在启动…</string>
+    <string name="voice_status_loading">正在加载模型…（仅首次较慢）</string>
+    <string name="voice_status_listening">正在聆听 · %1$s</string>
+    <string name="voice_status_finishing">正在识别…</string>
+    <string name="voice_status_idle">点击麦克风开始说话</string>
+    <string name="voice_status_error">出错：%1$s</string>
+    <string name="voice_status_crashed">识别进程崩溃了（可能是 NPU 初始化失败），可以先换成 CPU 模型试试。</string>
+    <string name="voice_status_need_permission">需要麦克风权限</string>
+    <string name="voice_status_need_model">模型未安装：%1$s</string>
+    <string name="voice_open_settings">语音设置</string>
+    <string name="voice_grant_permission">授予权限</string>
+    <string name="voice_download_model">去下载模型</string>
+
+    <string name="voice_permission_title">麦克风权限</string>
+    <string name="voice_permission_ok">已授权</string>
+    <string name="voice_permission_missing">未授权，点击申请</string>
+    <string name="voice_models">模型</string>
+    <string name="voice_model_selected">使用中</string>
+    <string name="voice_model_not_installed">未安装 · 约 %1$d MB</string>
+    <string name="voice_model_installed">已安装 · %1$s</string>
+    <string name="voice_model_failed">失败：%1$s</string>
+    <string name="voice_downloading">下载并解压中</string>
+    <string name="voice_importing">导入中</string>
+    <string name="voice_download">下载（约 %1$d MB）</string>
+    <string name="voice_cancel_download">取消下载</string>
+    <string name="voice_use_model">使用此模型</string>
+    <string name="voice_self_test">自检</string>
+    <string name="voice_self_test_running">正在加载模型并识别自带的测试音频…</string>
+    <string name="voice_self_test_result">后端：%1$s\n模型加载：%2$d ms\n音频：%3$.1f 秒，解码：%4$d ms（RTF %5$.3f）\n\n识别结果：\n%6$s</string>
+    <string name="voice_delete_model">删除</string>
+    <string name="voice_delete_confirm">确定删除这个模型吗？</string>
+    <string name="voice_import_archive">从文件导入模型</string>
+    <string name="voice_import_archive_summary">选择在别处下载好的 sherpa-onnx .tar.bz2 模型包</string>
+    <string name="voice_import_done">已导入 %1$s</string>
+    <string name="voice_import_failed">导入失败：%1$s</string>
+    <string name="voice_download_prefix">下载加速前缀</string>
+    <string name="voice_download_prefix_hint">可选。会加在 GitHub 下载地址前面，例如 https://ghfast.top/ 。如果镜像需要把地址放在中间，用 {url} 占位。</string>
+    <string name="voice_download_prefix_none">无（直接从 GitHub 下载）</string>
+    <string name="voice_device_info">设备信息</string>
+    <string name="voice_device_info_summary">SoC：%1$s · sherpa-onnx：%2$s · QNN HTP v75：%3$s</string>
+    <string name="voice_yes">有</string>
+    <string name="voice_no">无</string>
+</resources>

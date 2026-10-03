@@ -25,6 +25,8 @@ import org.fcitx.fcitx5.android.input.popup.EmojiModifier
 import org.fcitx.fcitx5.android.utils.DeviceUtil
 import org.fcitx.fcitx5.android.utils.appContext
 import org.fcitx.fcitx5.android.utils.vibrator
+import org.fcitx.fcitx5.android.voice.SpeechLanguage
+import org.fcitx.fcitx5.android.voice.SpeechModel
 
 class AppPrefs(private val sharedPreferences: SharedPreferences) {
 
@@ -371,6 +373,35 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         )
     }
 
+    inner class Voice : ManagedPreferenceCategory(R.string.voice_input, sharedPreferences) {
+        val showToolbarButton =
+            switch(R.string.voice_show_toolbar_button, "voice_show_toolbar_button", true)
+        val model = enumList(R.string.voice_model, "voice_model", SpeechModel.SenseVoiceQnnSM8650)
+        val language = enumList(R.string.voice_language, "voice_language", SpeechLanguage.Auto) {
+            model.getValue() != SpeechModel.Qwen3Asr
+        }
+        val itn = switch(R.string.voice_itn, "voice_itn", true, R.string.voice_itn_summary) {
+            model.getValue() != SpeechModel.Qwen3Asr
+        }
+        val partialResults = switch(
+            R.string.voice_partial_results, "voice_partial_results", true, R.string.voice_partial_results_summary
+        )
+        val autoStart = switch(R.string.voice_auto_start, "voice_auto_start", true)
+        val silenceMillis = int(
+            R.string.voice_silence_duration, "voice_silence_ms", 600, 200, 2000, "ms", 100
+        )
+        val autoSpace = switch(
+            R.string.voice_auto_space, "voice_auto_space", true, R.string.voice_auto_space_summary
+        )
+        val dropTrailingPeriod = switch(
+            R.string.voice_drop_trailing_period, "voice_drop_trailing_period", false
+        )
+
+        /** UI is created by VoiceSettingsFragment */
+        val downloadPrefix =
+            ManagedPreference.PString(sharedPreferences, "voice_download_prefix", "").apply { register() }
+    }
+
     private val providers = mutableListOf<ManagedPreferenceProvider>()
 
     fun <T : ManagedPreferenceProvider> registerProvider(
@@ -390,6 +421,7 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
     val candidates = Candidates().register()
     val clipboard = Clipboard().register()
     val symbols = Symbols().register()
+    val voice = Voice().register()
     val advanced = Advanced().register()
 
     @Keep

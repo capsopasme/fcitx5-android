@@ -64,6 +64,7 @@ import org.fcitx.fcitx5.android.input.keyboard.CustomGestureView
 import org.fcitx.fcitx5.android.input.keyboard.KeyboardWindow
 import org.fcitx.fcitx5.android.input.popup.PopupComponent
 import org.fcitx.fcitx5.android.input.status.StatusAreaWindow
+import org.fcitx.fcitx5.android.input.voice.VoiceInputWindow
 import org.fcitx.fcitx5.android.input.wm.InputWindow
 import org.fcitx.fcitx5.android.input.wm.InputWindowManager
 import org.fcitx.fcitx5.android.utils.AppUtil
@@ -105,6 +106,7 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
     private val toolbarNumRowOnPassword by prefs.keyboard.toolbarNumRowOnPassword
     private val showVoiceInputButton by prefs.keyboard.showVoiceInputButton
     private val preferredVoiceInput by prefs.keyboard.preferredVoiceInput
+    private val builtinVoiceButton = prefs.voice.showToolbarButton
 
     private var clipboardTimeoutJob: Job? = null
 
@@ -147,6 +149,12 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
                 clipboardTimeoutJob?.cancel()
                 clipboardTimeoutJob = null
             }
+        }
+
+    @Keep
+    private val onBuiltinVoiceButtonUpdateListener =
+        ManagedPreference.OnChangeListener<Boolean> { _, it ->
+            idleUi.buttonsUi.voiceButton.visibility = if (it) View.VISIBLE else View.GONE
         }
 
     @Keep
@@ -303,6 +311,11 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
                 clipboardButton.setOnClickListener {
                     windowManager.attachWindow(ClipboardWindow())
                 }
+                voiceButton.setOnClickListener {
+                    windowManager.attachWindow(VoiceInputWindow())
+                }
+                voiceButton.visibility =
+                    if (builtinVoiceButton.getValue()) View.VISIBLE else View.GONE
                 moreButton.setOnClickListener {
                     windowManager.attachWindow(StatusAreaWindow())
                 }
@@ -429,6 +442,7 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
         ClipboardManager.addOnUpdateListener(onClipboardUpdateListener)
         clipboardSuggestion.registerOnChangeListener(onClipboardSuggestionUpdateListener)
         clipboardItemTimeout.registerOnChangeListener(onClipboardTimeoutUpdateListener)
+        builtinVoiceButton.registerOnChangeListener(onBuiltinVoiceButtonUpdateListener)
     }
 
     override fun onStartInput(info: EditorInfo, capFlags: CapabilityFlags) {

@@ -82,6 +82,12 @@ class FcitxApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        if (isVoiceProcess()) {
+            // the isolated speech recognizer process only needs a Context,
+            // skip fcitx / clipboard / theme initialization there
+            instance = this
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !userManager.isUserUnlocked) {
             isDirectBootMode = true
             registerReceiver(unlockReceiver, IntentFilter(Intent.ACTION_USER_UNLOCKED))
@@ -151,8 +157,22 @@ class FcitxApplication : Application() {
         )
     }
 
+    private val voiceProcess by lazy {
+        val name = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Application.getProcessName()
+        } else {
+            runCatching {
+                java.io.File("/proc/self/cmdline").readText().trimEnd('\u0000')
+            }.getOrDefault("")
+        }
+        name.endsWith(":voice")
+    }
+
+    private fun isVoiceProcess(): Boolean = voiceProcess
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        if (isVoiceProcess()) return
         ThemeManager.onSystemPlatteChange(newConfig)
         Locales.onLocaleChange(newConfig)
     }

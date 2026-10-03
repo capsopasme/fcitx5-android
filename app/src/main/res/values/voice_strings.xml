@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ SPDX-License-Identifier: LGPL-2.1-or-later
+  ~ SPDX-FileCopyrightText: Copyright 2026 Fcitx5 for Android Contributors
+  -->
+<resources>
+    <string name="voice_input">Voice input</string>
+    <string name="voice_show_toolbar_button">Show microphone button in toolbar</string>
+    <string name="voice_model">Recognition model</string>
+    <string name="voice_language">Language</string>
+    <string name="voice_itn">Punctuation and number formatting</string>
+    <string name="voice_itn_summary">Adds punctuation and converts spoken numbers (inverse text normalization)</string>
+    <string name="voice_partial_results">Show text while speaking</string>
+    <string name="voice_partial_results_summary">Re-recognize the current sentence while you speak. Final text is committed when you pause.</string>
+    <string name="voice_auto_start">Start listening when the panel opens</string>
+    <string name="voice_silence_duration">Pause length that ends a sentence</string>
+    <string name="voice_auto_space">Automatic spaces between English words</string>
+    <string name="voice_auto_space_summary">Insert a space when English text follows English text</string>
+    <string name="voice_drop_trailing_period">Remove trailing period</string>
+
+    <string name="voice_model_sense_voice_qnn">SenseVoice · Qualcomm NPU (QNN, Snapdragon 8 Gen 3)</string>
+    <string name="voice_model_sense_voice_cpu">SenseVoice · CPU</string>
+    <string name="voice_model_qwen3_asr">Qwen3-ASR 0.6B · CPU (most accurate, slower)</string>
+
+    <string name="voice_lang_auto">Auto (Chinese / English mixed)</string>
+    <string name="voice_lang_zh">Mandarin</string>
+    <string name="voice_lang_en">English</string>
+    <string name="voice_lang_yue">Cantonese</string>
+    <string name="voice_lang_ja">Japanese</string>
+    <string name="voice_lang_ko">Korean</string>
+
+    <string name="voice_error_model_missing">Model files missing: %1$s</string>
+    <string name="voice_error_init_failed">Failed to load the model. %1$s</string>
+    <string name="voice_error_qnn_soc">The NPU model is built for Snapdragon 8 Gen 3 (SM8650), this device is %1$s. Please use a CPU model.</string>
+    <string name="voice_error_qnn_libs">QNN runtime libraries are not packaged in this build: %1$s</string>
+    <string name="voice_error_no_test_wav">No test audio found in the model folder</string>
+    <string name="voice_permission_granted">Microphone permission granted</string>
+    <string name="voice_permission_denied_forever">Please allow the microphone permission in app settings</string>
+
+    <string name="voice_backspace">Backspace</string>
+    <string name="voice_enter">Enter</string>
+    <string name="voice_start">Start listening</string>
+    <string name="voice_stop">Stop listening</string>
+
+    <string name="voice_status_starting">Starting…</string>
+    <string name="voice_status_loading">Loading model… (only slow the first time)</string>
+    <string name="voice_status_listening">Listening · %1$s</string>
+    <string name="voice_status_finishing">Recognizing…</string>
+    <string name="voice_status_idle">Tap the microphone to speak</string>
+    <string name="voice_status_error">Error: %1$s</string>
+    <string name="voice_status_crashed">The recognizer process crashed (NPU initialization failed?). Try the CPU model.</string>
+    <string name="voice_status_need_permission">Microphone permission is required</string>
+    <string name="voice_status_need_model">Model not installed: %1$s</string>
+    <string name="voice_open_settings">Voice settings</string>
+    <string name="voice_grant_permission">Grant permission</string>
+    <string name="voice_download_model">Download model</string>
+
+    <string name="voice_permission_title">Microphone permission</string>
+    <string name="voice_permission_ok">Granted</string>
+    <string name="voice_permission_missing">Not granted, tap to request</string>
+    <string name="voice_models">Models</string>
+    <string name="voice_model_selected">In use</string>
+    <string name="voice_model_not_installed">Not installed · about %1$d MB download</string>
+    <string name="voice_model_installed">Installed · %1$s</string>
+    <string name="voice_model_failed">Failed: %1$s</string>
+    <string name="voice_downloading">Downloading and extracting</string>
+    <string name="voice_importing">Importing</string>
+    <string name="voice_download">Download (about %1$d MB)</string>
+    <string name="voice_cancel_download">Cancel download</string>
+    <string name="voice_use_model">Use this model</string>
+    <string name="voice_self_test">Self test</string>
+    <string name="voice_self_test_running">Loading the model and recognizing the bundled test audio…</string>
+    <string name="voice_self_test_result">Backend: %1$s\nModel load: %2$d ms\nAudio: %3$.1f s, decode: %4$d ms (RTF %5$.3f)\n\nResult:\n%6$s</string>
+    <string name="voice_delete_model">Delete</string>
+    <string name="voice_delete_confirm">Delete this model?</string>
+    <string name="voice_import_archive">Import model from file</string>
+    <string name="voice_import_archive_summary">Pick a sherpa-onnx .tar.bz2 model archive downloaded elsewhere</string>
+    <string name="voice_import_done">Imported %1$s</string>
+    <string name="voice_import_failed">Import failed: %1$s</string>
+    <string name="voice_download_prefix">Download mirror prefix</string>
+    <string name="voice_download_prefix_hint">Optional. Prepended to the GitHub URL, e.g. https://ghfast.top/ . Use {url} as a placeholder if the mirror needs the URL in the middle.</string>
+    <string name="voice_download_prefix_none">None (download from GitHub directly)</string>
+    <string name="voice_device_info">Device</string>
+    <string name="voice_device_info_summary">SoC: %1$s · sherpa-onnx: %2$s · QNN HTP v75: %3$s</string>
+    <string name="voice_yes">yes</string>
+    <string name="voice_no">no</string>
+</resources>

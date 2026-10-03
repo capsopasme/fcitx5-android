@@ -13,6 +13,10 @@
 
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- built-in offline voice input -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- only used to download speech models -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- remove intent queries merged from library manifest (namely Android-Image-Cropper) -->
     <queries tools:node="removeAll" />
@@ -135,6 +139,27 @@
                 android:name="android.view.im"
                 android:resource="@xml/input_method" />
         </service>
+
+        <!--
+          Offline speech recognizer (sherpa-onnx + Qualcomm QNN), isolated in its own process:
+          native failures during model initialization call exit() and must not kill the keyboard.
+        -->
+        <service
+            android:name=".voice.VoiceRecognitionService"
+            android:exported="false"
+            android:process=":voice" />
+
+        <activity
+            android:name=".voice.VoicePermissionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity=".voice.VoicePermissionActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- FastRPC library on Qualcomm devices, needed by the QNN HTP backend -->
+        <uses-native-library
+            android:name="libcdsprpc.so"
+            android:required="false" />
 
         <service
             android:name=".FcitxRemoteService"

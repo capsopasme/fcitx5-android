@@ -1,0 +1,206 @@
+/*
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ * SPDX-FileCopyrightText: Copyright 2026 Fcitx5 for Android Contributors
+ */
+package org.fcitx.fcitx5.android.voice
+
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.Bundle
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.Message
+import android.os.Messenger
+import android.os.RemoteException
+import org.fcitx.fcitx5.android.voice.VoiceProtocol as P
+
+/**
+ * IME side of the voice recognizer. Binds to [VoiceRecognitionService] in the `:voice` process.
+ * All callbacks are delivered on the main thread.
+ */
+class VoiceClient(private val context: Context, private val listener: Listener) {
+
+    interface Listener {
+        fun onLoading() {}
+        fun onReady(backend: String, loadMillis: Long) {}
+        fun onPartial(text: String) {}
+        fun onFinal(text: String) {}
+        fun onError(message: String) {}
+        fun onDone() {}
+        fun onTestResult(text: String, backend: String, loadMillis: Long, decodeMillis: Long, audioMillis: Long) {}
+        /** the recognizer process died, most likely a native crash during model init */
+        fun onServiceCrashed() {}
+    }
+
+    @Volatile
+    private var service: Messenger? = null
+    private var bound = false
+    private val pending = ArrayDeque<Message>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var sessionId = 0
+
+    @Volatile
+    private var activeSession = 0
+
+    private val incoming = Messenger(Handler(Looper.getMainLooper()) { msg ->
+        handleEvent(msg)
+        true
+    })
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder) {
+            service = Messenger(binder)
+            while (pending.isNotEmpty()) send(pending.removeFirst())
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            service = null
+            pending.clear()
+            if (activeSession != 0) {
+                activeSession = 0
+                listener.onServiceCrashed()
+            }
+        }
+
+        override fun onBindingDied(name: ComponentName?) {
+            onServiceDisconnected(name)
+            if (bound) {
+                // re-bind for next time
+                context.unbindService(this)
+                bound = false
+            }
+        }
+    }
+
+    fun bind() {
+        if (bound) return
+        bound = context.bindService(
+            Intent(context, VoiceRecognitionService::class.java),
+            connection,
+            Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT
+        )
+    }
+
+    fun unbind() {
+        if (!bound) return
+        activeSession = 0
+        pending.clear()
+        try {
+            context.unbindService(connection)
+        } catch (_: IllegalArgumentException) {
+        }
+        bound = false
+        service = null
+    }
+
+    val isSessionActive: Boolean
+        get() = activeSession != 0
+
+    fun start(
+        model: SpeechModel,
+        language: SpeechLanguage,
+        itn: Boolean,
+        partial: Boolean,
+        silenceMs: Int,
+    ) {
+        bind()
+        activeSession = ++sessionId
+        post(P.MSG_START) {
+            putString(P.KEY_MODEL, model.name)
+            putString(P.KEY_LANGUAGE, language.name)
+            putBoolean(P.KEY_ITN, itn)
+            putBoolean(P.KEY_PARTIAL, partial)
+            putInt(P.KEY_SILENCE_MS, silenceMs)
+        }
+    }
+
+    /** May be called from any thread */
+    fun sendAudio(pcm: FloatArray) {
+        val id = activeSession
+        if (id == 0) return
+        val m = Message.obtain(null, P.MSG_AUDIO, id, 0)
+        m.data = Bundle().apply { putFloatArray(P.KEY_PCM, pcm) }
+        val s = service
+        if (s == null) {
+            // still connecting, queue it on the main thread
+            mainHandler.post { pendingOrSend(m) }
+        } else {
+            try {
+                s.send(m)
+            } catch (_: RemoteException) {
+            }
+        }
+    }
+
+    private fun pendingOrSend(m: Message) {
+        if (service == null) pending.addLast(m) else send(m)
+    }
+
+    fun stop() {
+        if (activeSession == 0) return
+        post(P.MSG_STOP)
+    }
+
+    fun cancel() {
+        if (activeSession == 0) return
+        post(P.MSG_CANCEL)
+        activeSession = 0
+    }
+
+    fun selfTest(model: SpeechModel, language: SpeechLanguage, itn: Boolean) {
+        bind()
+        activeSession = ++sessionId
+        post(P.MSG_SELF_TEST) {
+            putString(P.KEY_MODEL, model.name)
+            putString(P.KEY_LANGUAGE, language.name)
+            putBoolean(P.KEY_ITN, itn)
+        }
+    }
+
+    private inline fun post(what: Int, fill: Bundle.() -> Unit = {}) {
+        val m = Message.obtain(null, what, activeSession, 0)
+        m.data = Bundle().apply(fill)
+        pendingOrSend(m)
+    }
+
+    private fun send(m: Message) {
+        m.replyTo = incoming
+        try {
+            service?.send(m)
+        } catch (_: RemoteException) {
+        }
+    }
+
+    private fun handleEvent(msg: Message) {
+        if (msg.arg1 != activeSession || activeSession == 0) return
+        val d = msg.data
+        when (msg.what) {
+            P.EVT_LOADING -> listener.onLoading()
+            P.EVT_READY -> listener.onReady(d.getString(P.KEY_BACKEND) ?: "", d.getLong(P.KEY_LOAD_MS))
+            P.EVT_PARTIAL -> listener.onPartial(d.getString(P.KEY_TEXT) ?: "")
+            P.EVT_FINAL -> listener.onFinal(d.getString(P.KEY_TEXT) ?: "")
+            P.EVT_ERROR -> {
+                activeSession = 0
+                listener.onError(d.getString(P.KEY_MESSAGE) ?: "")
+            }
+            P.EVT_DONE -> {
+                activeSession = 0
+                listener.onDone()
+            }
+            P.EVT_TEST_RESULT -> {
+                activeSession = 0
+                listener.onTestResult(
+                    d.getString(P.KEY_TEXT) ?: "",
+                    d.getString(P.KEY_BACKEND) ?: "",
+                    d.getLong(P.KEY_LOAD_MS),
+                    d.getLong(P.KEY_DECODE_MS),
+                    d.getLong(P.KEY_AUDIO_MS),
+                )
+            }
+        }
+    }
+}

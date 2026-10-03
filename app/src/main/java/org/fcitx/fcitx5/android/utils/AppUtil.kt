@@ -42,6 +42,9 @@ object AppUtil {
     fun launchMainToThemeList(context: Context) =
         launchMainToDest(context, SettingsRoute.Theme)
 
+    fun launchMainToVoiceSettings(context: Context) =
+        launchMainToDest(context, SettingsRoute.Voice)
+
     fun launchMainToInputMethodConfig(context: Context, uniqueName: String, displayName: String) =
         launchMainToDest(context, SettingsRoute.InputMethodConfig(displayName, uniqueName))
 
