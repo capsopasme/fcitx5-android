@@ -143,21 +143,23 @@ class VoiceEngine private constructor(
         }
 
         /**
-         * Silero VAD bundled as a raw resource, copied to internal storage once.
+         * Silero VAD bundled as a raw resource, copied to internal storage.
          * Written to a temp file, fsync'ed, then renamed: a power loss can never leave a
          * truncated model behind (onnxruntime would abort() on it and the voice process
          * would crash on every start).
+         * The copy survives app updates, so it's replaced when the bundled one differs
+         * (an update shipping a new VAD model would otherwise keep using the old file).
          */
         fun createVad(ctx: Context, model: SpeechModel, minSilenceMs: Int): Vad {
-            val file = File(VoiceModelManager.rootDir(ctx), "silero_vad.onnx")
-            if (!file.isFile || file.length() == 0L) {
+            val file = File(VoiceModelManager.rootDir(ctx), VoiceModelManager.VAD_FILE_NAME)
+            // ~640 KB, read only when the VAD is (re)created
+            val bundled = ctx.resources.openRawResource(R.raw.silero_vad).use { it.readBytes() }
+            if (!file.isFile || !sameContent(file, bundled)) {
                 file.parentFile?.mkdirs()
                 val tmp = File(file.path + ".tmp")
-                ctx.resources.openRawResource(R.raw.silero_vad).use { input ->
-                    java.io.FileOutputStream(tmp).use { out ->
-                        input.copyTo(out)
-                        out.fd.sync()
-                    }
+                java.io.FileOutputStream(tmp).use { out ->
+                    out.write(bundled)
+                    out.fd.sync()
                 }
                 if (!tmp.renameTo(file)) {
                     tmp.delete()
@@ -181,6 +183,9 @@ class VoiceEngine private constructor(
             )
             return Vad(assetManager = null, config = config)
         }
+
+        private fun sameContent(file: File, bytes: ByteArray): Boolean =
+            file.length() == bytes.size.toLong() && file.readBytes().contentEquals(bytes)
 
         const val VAD_WINDOW = 512
     }

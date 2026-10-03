@@ -20,6 +20,9 @@ object VoiceProtocol {
     const val MSG_CANCEL = 4
     const val MSG_SELF_TEST = 5
 
+    /** load the model (and VAD) without starting a session; arg1 is 0, no reply */
+    const val MSG_PRELOAD = 6
+
     // service -> client
     const val EVT_LOADING = 101
     const val EVT_READY = 102

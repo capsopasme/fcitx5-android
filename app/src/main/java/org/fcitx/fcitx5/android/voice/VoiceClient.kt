@@ -15,6 +15,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.RemoteException
+import java.util.concurrent.atomic.AtomicInteger
 import org.fcitx.fcitx5.android.voice.VoiceProtocol as P
 
 /**
@@ -42,8 +43,6 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
     private var bound = false
     private val pending = ArrayDeque<Message>()
     private val mainHandler = Handler(Looper.getMainLooper())
-
-    private var sessionId = 0
 
     @Volatile
     private var activeSession = 0
@@ -124,7 +123,7 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
         silenceMs: Int,
     ) {
         if (!bindOrFail()) return
-        activeSession = ++sessionId
+        activeSession = nextSessionId()
         post(P.MSG_START) {
             putString(P.KEY_MODEL, model.name)
             putString(P.KEY_LANGUAGE, language.name)
@@ -177,9 +176,28 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
         activeSession = 0
     }
 
+    /**
+     * Load the model into the recognizer process ahead of time, so that the first [start]
+     * doesn't wait for it. No events are delivered for a preload (it has no session); errors are
+     * reported again by the next [start]. Does nothing while a session is running.
+     */
+    fun preload(model: SpeechModel, language: SpeechLanguage, itn: Boolean, silenceMs: Int) {
+        if (activeSession != 0) return
+        bind()
+        if (!bound) return
+        val m = Message.obtain(null, P.MSG_PRELOAD, 0, 0)
+        m.data = Bundle().apply {
+            putString(P.KEY_MODEL, model.name)
+            putString(P.KEY_LANGUAGE, language.name)
+            putBoolean(P.KEY_ITN, itn)
+            putInt(P.KEY_SILENCE_MS, silenceMs)
+        }
+        pendingOrSend(m)
+    }
+
     fun selfTest(model: SpeechModel, language: SpeechLanguage, itn: Boolean) {
         if (!bindOrFail()) return
-        activeSession = ++sessionId
+        activeSession = nextSessionId()
         post(P.MSG_SELF_TEST) {
             putString(P.KEY_MODEL, model.name)
             putString(P.KEY_LANGUAGE, language.name)
@@ -203,6 +221,20 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
 
     companion object {
         private const val MAX_PENDING_AUDIO = 600
+
+        /**
+         * Shared by every client in this process: each voice panel and the settings self test
+         * have their own [VoiceClient], and the service tells sessions apart by id only, so a
+         * late MSG_STOP / audio chunk of a closed panel must never match a new panel's session.
+         */
+        private val sessionIds = AtomicInteger(0)
+
+        private fun nextSessionId(): Int {
+            while (true) {
+                val id = sessionIds.incrementAndGet()
+                if (id != 0) return id // 0 means "no session"
+            }
+        }
     }
 
     private fun handleEvent(msg: Message) {

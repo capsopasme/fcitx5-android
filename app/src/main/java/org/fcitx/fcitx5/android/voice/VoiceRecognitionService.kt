@@ -32,7 +32,6 @@ import java.io.File
  */
 class VoiceRecognitionService : Service() {
 
-    private lateinit var workerThread: HandlerThread
     private lateinit var worker: Handler
 
     private val incoming = Messenger(Handler(Looper.getMainLooper()) { msg ->
@@ -43,8 +42,7 @@ class VoiceRecognitionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        workerThread = HandlerThread("voice-worker").apply { start() }
-        worker = Handler(workerThread.looper) { msg ->
+        worker = Handler(workerLooper) { msg ->
             try {
                 handleWork(msg)
             } catch (e: Throwable) {
@@ -70,12 +68,15 @@ class VoiceRecognitionService : Service() {
             resetSession()
             vad?.release()
             vad = null
-            // Keep the engine: once unbound this process is cached and frozen by the system, so the
-            // loaded model costs no CPU and no power (DRAM refresh doesn't care whether pages are
-            // used), and it is the first thing lmkd kills when memory is actually needed. Releasing
-            // it here would only make the next start pay for re-loading the model.
+            vadKey = null
+            // Keep small engines: once unbound this process is cached and frozen by the system, so
+            // the loaded model costs no CPU and no power, and lmkd reclaims it when memory is
+            // actually needed. Large ones (Qwen3-ASR, ~1 GB resident) would push a lot of other
+            // apps out of the cache instead; they are released and preloaded again next time the
+            // panel opens.
+            if (cachedEngine?.key?.model?.keepLoadedWhenIdle == false) releaseEngine()
         }
-        workerThread.quitSafely()
+        // the worker thread is process-wide, see [workerLooper]
         super.onDestroy()
     }
 
@@ -124,6 +125,7 @@ class VoiceRecognitionService : Service() {
             P.MSG_STOP -> stop(msg.arg1, cancel = false)
             P.MSG_CANCEL -> stop(msg.arg1, cancel = true)
             P.MSG_SELF_TEST -> selfTest(msg)
+            P.MSG_PRELOAD -> preload(msg)
         }
     }
 
@@ -140,6 +142,28 @@ class VoiceRecognitionService : Service() {
         return VoiceEngine.create(this, key).also { cachedEngine = it }
     }
 
+    private fun ensureVad(model: SpeechModel, silenceMs: Int): Vad {
+        val k = model to silenceMs
+        vad?.let { if (vadKey == k) return it }
+        vad?.release()
+        vad = null
+        return VoiceEngine.createVad(this, model, silenceMs).also {
+            vad = it
+            vadKey = k
+        }
+    }
+
+    /** warm up model + VAD while the panel is open but nobody is talking yet */
+    private fun preload(msg: Message) {
+        // a running session already has its engine; never swap it out from under it
+        if (session != null) return
+        val key = parseKey(msg.data)
+        val t0 = SystemClock.elapsedRealtime()
+        ensureEngine(key, null, 0)
+        ensureVad(key.model, msg.data.getInt(P.KEY_SILENCE_MS, 600))
+        Log.d(TAG, "preload $key done in ${SystemClock.elapsedRealtime() - t0}ms")
+    }
+
     private fun start(msg: Message) {
         val data = msg.data
         val key = parseKey(data)
@@ -147,12 +171,7 @@ class VoiceRecognitionService : Service() {
         preemptSession(msg.arg1, msg.replyTo)
         resetSession()
         val engine = ensureEngine(key, msg.replyTo, msg.arg1)
-        if (vad == null || vadKey != key.model to silenceMs) {
-            vad?.release()
-            vad = VoiceEngine.createVad(this, key.model, silenceMs)
-            vadKey = key.model to silenceMs
-        }
-        vad!!.reset()
+        ensureVad(key.model, silenceMs).reset()
         session = Session(
             msg.arg1, msg.replyTo,
             partial = data.getBoolean(P.KEY_PARTIAL, true) && key.model.fastEnoughForPartial,
@@ -329,8 +348,20 @@ class VoiceRecognitionService : Service() {
         private const val PARTIAL_INTERVAL_MS = 400L
         private const val PARTIAL_MIN_NEW_AUDIO = P.SAMPLE_RATE * 3 / 10
 
-        /** survives service re-creation as long as the `:voice` process is alive */
-        @Volatile
+        /**
+         * One worker thread for the whole process, never quit. [cachedEngine] outlives service
+         * instances, and with a thread per instance a quick unbind + rebind could release the
+         * engine on the old thread while the new one is decoding with it (a native
+         * use-after-free). On a single thread every engine access is serialized.
+         */
+        private val workerLooper: Looper by lazy {
+            HandlerThread("voice-worker").apply { start() }.looper
+        }
+
+        /**
+         * Survives service re-creation as long as the `:voice` process is alive.
+         * Only touched on the [workerLooper] thread.
+         */
         private var cachedEngine: VoiceEngine? = null
 
         private fun releaseEngine() {
