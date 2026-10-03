@@ -37,6 +37,8 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
 
     @Volatile
     private var service: Messenger? = null
+
+    @Volatile
     private var bound = false
     private val pending = ArrayDeque<Message>()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -97,8 +99,22 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
         service = null
     }
 
+    /**
+     * Report a failed bind asynchronously (the caller may still be starting the microphone,
+     * which the error handler is expected to stop) instead of queueing messages forever.
+     */
+    private fun bindOrFail(): Boolean {
+        bind()
+        if (!bound) mainHandler.post { listener.onError("Cannot connect to the recognizer service") }
+        return bound
+    }
+
     val isSessionActive: Boolean
         get() = activeSession != 0
+
+    /** id of the running session, 0 if none */
+    val currentSession: Int
+        get() = activeSession
 
     fun start(
         model: SpeechModel,
@@ -107,7 +123,7 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
         partial: Boolean,
         silenceMs: Int,
     ) {
-        bind()
+        if (!bindOrFail()) return
         activeSession = ++sessionId
         post(P.MSG_START) {
             putString(P.KEY_MODEL, model.name)
@@ -121,7 +137,7 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
     /** May be called from any thread */
     fun sendAudio(pcm: FloatArray) {
         val id = activeSession
-        if (id == 0) return
+        if (id == 0 || !bound) return
         val m = Message.obtain(null, P.MSG_AUDIO, id, 0)
         m.data = Bundle().apply { putFloatArray(P.KEY_PCM, pcm) }
         val s = service
@@ -137,11 +153,21 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
     }
 
     private fun pendingOrSend(m: Message) {
-        if (service == null) pending.addLast(m) else send(m)
+        if (service != null) {
+            send(m)
+            return
+        }
+        if (!bound) return // bindService() failed, nobody will ever drain the queue
+        if (m.what == P.MSG_AUDIO && pending.size >= MAX_PENDING_AUDIO) {
+            // the service doesn't come up: keep the queue bounded (~60s of audio)
+            return
+        }
+        pending.addLast(m)
     }
 
-    fun stop() {
-        if (activeSession == 0) return
+    /** @param id only stop if this session is still the active one */
+    fun stop(id: Int = activeSession) {
+        if (activeSession == 0 || id != activeSession) return
         post(P.MSG_STOP)
     }
 
@@ -152,7 +178,7 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
     }
 
     fun selfTest(model: SpeechModel, language: SpeechLanguage, itn: Boolean) {
-        bind()
+        if (!bindOrFail()) return
         activeSession = ++sessionId
         post(P.MSG_SELF_TEST) {
             putString(P.KEY_MODEL, model.name)
@@ -173,6 +199,10 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
             service?.send(m)
         } catch (_: RemoteException) {
         }
+    }
+
+    companion object {
+        private const val MAX_PENDING_AUDIO = 600
     }
 
     private fun handleEvent(msg: Message) {

@@ -34,6 +34,7 @@
     <string name="voice_error_qnn_soc">NPU 模型是为骁龙 8 Gen 3（SM8650）编译的，本机是 %1$s，请改用 CPU 模型。</string>
     <string name="voice_error_qnn_libs">此版本未打包 QNN 运行库：%1$s</string>
     <string name="voice_error_no_test_wav">模型目录里没有测试音频</string>
+    <string name="voice_error_interrupted">被另一个语音会话打断（例如设置里的自检）</string>
     <string name="voice_permission_granted">已获得麦克风权限</string>
     <string name="voice_permission_denied_forever">请在应用设置中允许麦克风权限</string>
 

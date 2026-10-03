@@ -151,11 +151,17 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
             }
         }
 
+    /** never offer dictation in password fields: the transcript is shown on screen */
+    private var isPasswordField = false
+
+    private fun updateBuiltinVoiceButton() {
+        idleUi.buttonsUi.voiceButton.visibility =
+            if (builtinVoiceButton.getValue() && !isPasswordField) View.VISIBLE else View.GONE
+    }
+
     @Keep
     private val onBuiltinVoiceButtonUpdateListener =
-        ManagedPreference.OnChangeListener<Boolean> { _, it ->
-            idleUi.buttonsUi.voiceButton.visibility = if (it) View.VISIBLE else View.GONE
-        }
+        ManagedPreference.OnChangeListener<Boolean> { _, _ -> updateBuiltinVoiceButton() }
 
     @Keep
     private val onClipboardTimeoutUpdateListener =
@@ -315,7 +321,7 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
                     windowManager.attachWindow(VoiceInputWindow())
                 }
                 voiceButton.visibility =
-                    if (builtinVoiceButton.getValue()) View.VISIBLE else View.GONE
+                    if (builtinVoiceButton.getValue() && !isPasswordField) View.VISIBLE else View.GONE
                 moreButton.setOnClickListener {
                     windowManager.attachWindow(StatusAreaWindow())
                 }
@@ -450,6 +456,8 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
             idleUi.privateMode(info.imeOptions.hasFlag(EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING))
         }
         isCapabilityFlagsPassword = toolbarNumRowOnPassword && capFlags.has(CapabilityFlag.Password)
+        isPasswordField = capFlags.has(CapabilityFlag.Password)
+        updateBuiltinVoiceButton()
         isInlineSuggestionPresent = false
         numberRowState = NumberRowState.Auto
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

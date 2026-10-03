@@ -42,6 +42,7 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
 
     private var state = State.Idle
     private var attached = false
+    private var visible = false
 
     /** text committed during this panel session, for display only */
     private val committed = StringBuilder()
@@ -60,9 +61,18 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
             enterButton.setOnClickListener {
                 service.sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
             }
-            onWindowVisibilityChanged = { visible ->
-                // the keyboard was hidden while listening: stop the microphone
-                if (!visible && (state == State.Listening || state == State.Loading)) stopListening()
+            onWindowVisibilityChanged = { v ->
+                visible = v
+                if (!v) {
+                    // the keyboard was hidden while listening: stop the microphone
+                    if (state == State.Listening || state == State.Loading) stopListening()
+                    // this window stays attached until the next input starts, don't keep
+                    // the recognizer process (and its model) pinned all that time
+                    scheduleIdleUnbind()
+                } else if (attached) {
+                    mainHandler.removeCallbacks(idleUnbind)
+                    if (isReady()) client.bind()
+                }
             }
         }
     }
@@ -102,16 +112,14 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
             toIdle()
             ui.statusText.text = context.getString(R.string.voice_status_error, message)
             offerSettings()
-            if (!attached) client.unbind()
+            if (!attached || !visible) scheduleIdleUnbind()
         }
 
         override fun onDone() {
+            capture.stop()
             toIdle()
-            if (attached) {
-                ui.statusText.setText(R.string.voice_status_idle)
-            } else {
-                client.unbind()
-            }
+            if (attached) ui.statusText.setText(R.string.voice_status_idle)
+            if (!attached || !visible) scheduleIdleUnbind()
         }
 
         override fun onServiceCrashed() {
@@ -143,6 +151,26 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
         )
     }
 
+    /**
+     * Keep the recognizer bound (model loaded, instant restart) for a while after the panel is
+     * closed or hidden, then let it go so the `:voice` process frees the model.
+     */
+    private val idleUnbind = Runnable {
+        if (attached && visible) return@Runnable
+        if (state == State.Listening || state == State.Loading) return@Runnable
+        // also covers a recognizer that never answered MSG_STOP
+        if (state == State.Finishing) toIdle()
+        client.unbind()
+    }
+
+    private fun scheduleIdleUnbind() {
+        mainHandler.removeCallbacks(idleUnbind)
+        mainHandler.postDelayed(idleUnbind, IDLE_UNBIND_DELAY_MS)
+    }
+
+    private fun isReady() =
+        AudioCapture.hasPermission(context) && VoiceModelManager.isInstalled(context, prefs.model.getValue())
+
     private fun toIdle() {
         state = State.Idle
         partial = ""
@@ -165,6 +193,8 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
     }
 
     private fun startListening() {
+        if (state != State.Idle) return
+        mainHandler.removeCallbacks(idleUnbind)
         ui.showAction(null, null)
         if (!AudioCapture.hasPermission(context)) {
             ui.statusText.setText(R.string.voice_status_need_permission)
@@ -206,12 +236,15 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
     }
 
     private fun stopListening() {
-        capture.stop()
+        val id = client.currentSession
+        // send MSG_STOP only after the capture thread has delivered its last chunk,
+        // otherwise the end of the last word can be cut off
+        val pending = capture.stop { mainHandler.post { client.stop(id) } }
         if (client.isSessionActive) {
             state = State.Finishing
             ui.setMicState(VoiceInputUi.MicState.Loading)
             ui.statusText.setText(R.string.voice_status_finishing)
-            client.stop()
+            if (!pending) client.stop(id)
         } else {
             toIdle()
         }
@@ -259,14 +292,15 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
 
     override fun onAttached() {
         attached = true
+        visible = true
+        mainHandler.removeCallbacks(idleUnbind)
         committed.setLength(0)
         partial = ""
         ui.showTranscript(committed, partial)
         ui.showAction(null, null)
         ui.setMicState(VoiceInputUi.MicState.Idle)
         ui.statusText.setText(R.string.voice_status_idle)
-        val model = prefs.model.getValue()
-        val ready = AudioCapture.hasPermission(context) && VoiceModelManager.isInstalled(context, model)
+        val ready = isReady()
         if (ready) {
             // connect early so that the recognizer process (and the model) is warm
             client.bind()
@@ -278,13 +312,13 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
 
     override fun onDetached() {
         attached = false
-        when (state) {
-            State.Loading, State.Listening -> stopListening()
-            State.Finishing -> {}
-            State.Idle -> client.unbind()
-        }
-        // in case the recognizer never answers
-        mainHandler.postDelayed({ if (!attached) client.unbind() }, 10_000L)
+        if (state == State.Loading || state == State.Listening) stopListening()
+        // unbinds once idle; also covers a recognizer that never answers
+        scheduleIdleUnbind()
+    }
+
+    companion object {
+        private const val IDLE_UNBIND_DELAY_MS = 60_000L
     }
 
 }

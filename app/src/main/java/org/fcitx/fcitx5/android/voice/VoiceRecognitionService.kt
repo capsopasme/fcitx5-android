@@ -70,7 +70,11 @@ class VoiceRecognitionService : Service() {
             resetSession()
             vad?.release()
             vad = null
-            // keep the engine cached in this process: re-opening the voice panel is instant
+            // Clients keep their binding for a grace period after the panel is closed (that's what
+            // keeps re-opening instant), so getting here means voice input has been idle for a while.
+            // Free the model now: once unbound this process is cached and frozen, and would otherwise
+            // pin hundreds of MB (plus the QNN context on the DSP) until the low memory killer comes.
+            releaseEngine()
         }
         workerThread.quitSafely()
         super.onDestroy()
@@ -91,6 +95,8 @@ class VoiceRecognitionService : Service() {
         val id: Int,
         val replyTo: Messenger?,
         val partial: Boolean,
+        /** force-cut speech longer than this, see [VoiceEngine.createVad] */
+        val maxSegmentSamples: Int,
     ) {
         val buffer = FloatRingBuffer()
 
@@ -100,6 +106,12 @@ class VoiceRecognitionService : Service() {
         var speechStart = 0
         var lastPartialAt = 0L
         var lastPartialText = ""
+
+        /** [fed] when the last partial was decoded */
+        var lastPartialFed = 0
+
+        /** cost of the last partial decode, used to throttle partials */
+        var lastPartialCost = 0L
     }
 
     private var session: Session? = null
@@ -133,6 +145,7 @@ class VoiceRecognitionService : Service() {
         val data = msg.data
         val key = parseKey(data)
         val silenceMs = data.getInt(P.KEY_SILENCE_MS, 600)
+        preemptSession(msg.arg1, msg.replyTo)
         resetSession()
         val engine = ensureEngine(key, msg.replyTo, msg.arg1)
         if (vad == null || vadKey != key.model to silenceMs) {
@@ -143,7 +156,8 @@ class VoiceRecognitionService : Service() {
         vad!!.reset()
         session = Session(
             msg.arg1, msg.replyTo,
-            partial = data.getBoolean(P.KEY_PARTIAL, true) && key.model.fastEnoughForPartial
+            partial = data.getBoolean(P.KEY_PARTIAL, true) && key.model.fastEnoughForPartial,
+            maxSegmentSamples = (key.model.maxSegmentSeconds * P.SAMPLE_RATE).toInt(),
         )
         reply(msg.replyTo, P.EVT_READY, msg.arg1) {
             putString(P.KEY_BACKEND, engine.backendName)
@@ -167,17 +181,32 @@ class VoiceRecognitionService : Service() {
                 // include ~0.3s before the detected onset
                 s.speechStart = (s.fed - PRE_ROLL).coerceAtLeast(0)
                 s.lastPartialAt = 0L
+                s.lastPartialFed = s.speechStart
             }
+            if (s.speechStarted && s.fed - s.speechStart >= s.maxSegmentSamples) {
+                // VAD's maxSpeechDuration is only a soft limit (it raises the threshold and waits
+                // for a short pause). QNN models have a fixed input length and silently truncate
+                // anything longer, so cut here no matter what.
+                vad.flush()
+            }
+            // drain per window, so that the bookkeeping below matches what VAD has emitted
+            if (!vad.empty()) drainSegments(s, engine, vad)
         }
-
-        drainSegments(s, engine, vad)
 
         if (s.speechStarted && s.partial) {
             val now = SystemClock.elapsedRealtime()
-            // skip partial decoding if we're falling behind
-            if (now - s.lastPartialAt >= PARTIAL_INTERVAL_MS && !worker.hasMessages(P.MSG_AUDIO)) {
-                s.lastPartialAt = now
+            // Every partial re-decodes the whole sentence so far (on QNN always a full 20s graph),
+            // so keep them rare: wait at least 3x the last decode time, require some new audio,
+            // and skip entirely while we're falling behind.
+            val interval = maxOf(PARTIAL_INTERVAL_MS, s.lastPartialCost * 3)
+            if (now - s.lastPartialAt >= interval &&
+                s.fed - s.lastPartialFed >= PARTIAL_MIN_NEW_AUDIO &&
+                !worker.hasMessages(P.MSG_AUDIO)
+            ) {
+                s.lastPartialFed = s.fed
                 val text = engine.recognize(s.buffer.copyOfRange(s.speechStart, s.fed))
+                s.lastPartialAt = SystemClock.elapsedRealtime()
+                s.lastPartialCost = s.lastPartialAt - now
                 if (text.isNotEmpty() && text != s.lastPartialText) {
                     s.lastPartialText = text
                     reply(s.replyTo, P.EVT_PARTIAL, s.id) { putString(P.KEY_TEXT, text) }
@@ -198,7 +227,8 @@ class VoiceRecognitionService : Service() {
             val t0 = SystemClock.elapsedRealtime()
             val text = engine.recognize(segment.samples)
             val cost = SystemClock.elapsedRealtime() - t0
-            Log.d(TAG, "segment ${segment.samples.size} samples -> '$text' in ${cost}ms")
+            // never log the recognized text itself: logcat is readable by other tools
+            Log.d(TAG, "segment ${segment.samples.size} samples -> ${text.length} chars in ${cost}ms")
             if (text.isNotEmpty()) {
                 reply(s.replyTo, P.EVT_FINAL, s.id) {
                     putString(P.KEY_TEXT, text)
@@ -208,9 +238,11 @@ class VoiceRecognitionService : Service() {
             // speech ended: everything fed so far belongs to that segment
             s.speechStarted = false
             s.lastPartialText = ""
+            s.lastPartialCost = 0L
             s.buffer.dropFront(s.fed)
             s.fed = 0
             s.speechStart = 0
+            s.lastPartialFed = 0
         }
     }
 
@@ -239,8 +271,22 @@ class VoiceRecognitionService : Service() {
         vad?.reset()
     }
 
+    /**
+     * Only one session at a time: if another client (e.g. the self test in settings while the
+     * keyboard is listening) takes over, tell the old one, so it stops its microphone instead
+     * of streaming audio that is silently ignored.
+     */
+    private fun preemptSession(newId: Int, newReplyTo: Messenger?) {
+        val old = session ?: return
+        if (old.id == newId && old.replyTo == newReplyTo) return
+        reply(old.replyTo, P.EVT_ERROR, old.id) {
+            putString(P.KEY_MESSAGE, getString(R.string.voice_error_interrupted))
+        }
+    }
+
     private fun selfTest(msg: Message) {
         val key = parseKey(msg.data)
+        preemptSession(msg.arg1, msg.replyTo)
         resetSession()
         val engine = ensureEngine(key, msg.replyTo, msg.arg1)
         val wav = File(VoiceModelManager.modelDir(this, key.model), key.model.testWav)
@@ -281,7 +327,8 @@ class VoiceRecognitionService : Service() {
         private const val TAG = "VoiceRecognition"
         private const val PRE_ROLL = P.SAMPLE_RATE * 3 / 10
         private const val KEEP_WHEN_SILENT = P.SAMPLE_RATE / 2
-        private const val PARTIAL_INTERVAL_MS = 350L
+        private const val PARTIAL_INTERVAL_MS = 400L
+        private const val PARTIAL_MIN_NEW_AUDIO = P.SAMPLE_RATE * 3 / 10
 
         /** survives service re-creation as long as the `:voice` process is alive */
         @Volatile

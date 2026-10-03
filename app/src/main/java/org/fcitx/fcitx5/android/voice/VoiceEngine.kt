@@ -142,16 +142,27 @@ class VoiceEngine private constructor(
             }
         }
 
-        /** Silero VAD bundled as a raw resource, copied to internal storage on first use */
+        /**
+         * Silero VAD bundled as a raw resource, copied to internal storage once.
+         * Written to a temp file, fsync'ed, then renamed: a power loss can never leave a
+         * truncated model behind (onnxruntime would abort() on it and the voice process
+         * would crash on every start).
+         */
         fun createVad(ctx: Context, model: SpeechModel, minSilenceMs: Int): Vad {
             val file = File(VoiceModelManager.rootDir(ctx), "silero_vad.onnx")
-            if (!file.isFile) {
+            if (!file.isFile || file.length() == 0L) {
                 file.parentFile?.mkdirs()
                 val tmp = File(file.path + ".tmp")
                 ctx.resources.openRawResource(R.raw.silero_vad).use { input ->
-                    tmp.outputStream().use { input.copyTo(it) }
+                    java.io.FileOutputStream(tmp).use { out ->
+                        input.copyTo(out)
+                        out.fd.sync()
+                    }
                 }
-                tmp.renameTo(file)
+                if (!tmp.renameTo(file)) {
+                    tmp.delete()
+                    throw EngineException("Failed to install VAD model")
+                }
             }
             val config = VadModelConfig(
                 sileroVadModelConfig = SileroVadModelConfig(
@@ -160,7 +171,9 @@ class VoiceEngine private constructor(
                     minSilenceDuration = minSilenceMs / 1000f,
                     minSpeechDuration = 0.25f,
                     windowSize = VAD_WINDOW,
-                    maxSpeechDuration = model.maxSegmentSeconds,
+                    // soft limit: past it VAD cuts at the next short pause. The service force-cuts
+                    // at maxSegmentSeconds, this leaves room to find a natural break first.
+                    maxSpeechDuration = (model.maxSegmentSeconds - 4f).coerceAtLeast(5f),
                 ),
                 sampleRate = VoiceProtocol.SAMPLE_RATE,
                 numThreads = 1,
