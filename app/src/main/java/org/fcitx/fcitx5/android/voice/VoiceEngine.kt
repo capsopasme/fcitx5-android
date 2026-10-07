@@ -19,15 +19,21 @@ import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import org.fcitx.fcitx5.android.R
 import java.io.File
+import java.io.IOException
 
 /**
  * Wraps a sherpa-onnx [OfflineRecognizer]. Only used inside the `:voice` process,
  * because native failures in QNN / onnxruntime call exit() and would kill the keyboard otherwise.
  */
 class VoiceEngine private constructor(
+    /** what was asked for */
     val key: Key,
+    /** what is actually loaded: [SpeechModel.SenseVoiceCpu] when the NPU model fell back to it */
+    val model: SpeechModel,
     private val recognizer: OfflineRecognizer,
     val loadMillis: Long,
+    /** shown in the panel's status line */
+    val backendName: String,
 ) {
 
     data class Key(
@@ -36,8 +42,9 @@ class VoiceEngine private constructor(
         val itn: Boolean,
     )
 
-    val backendName: String
-        get() = if (key.model.isQnn) "QNN HTP (NPU)" else "CPU"
+    /** a CPU engine standing in for an NPU model whose initialization crashed */
+    val isFallback: Boolean
+        get() = model != key.model
 
     /** @return recognized text, trimmed */
     fun recognize(samples: FloatArray): String {
@@ -65,8 +72,43 @@ class VoiceEngine private constructor(
         private val bigCoreThreads: Int
             get() = Runtime.getRuntime().availableProcessors().coerceIn(1, 8).let { if (it >= 8) 4 else 2 }
 
-        fun create(ctx: Context, key: Key): VoiceEngine {
-            val model = key.model
+        /**
+         * @param forceQnn try the NPU even if its last initialization crashed the process
+         */
+        fun create(ctx: Context, key: Key, forceQnn: Boolean = false): VoiceEngine {
+            if (!key.model.isQnn) return load(ctx, key, key.model, ctx.getString(R.string.voice_backend_cpu))
+            val guard = QnnCrashGuard(ctx)
+            if (forceQnn) guard.clear()
+            if (guard.crashedBefore()) {
+                // QNN reports fatal errors with exit(): loading it again would kill the process
+                // again, every time the panel opens. Use the CPU model instead if it's there.
+                Log.w(TAG, "QNN initialization crashed last time, not trying again")
+                val cpu = SpeechModel.SenseVoiceCpu
+                if (VoiceModelManager.isInstalled(ctx, cpu)) {
+                    return load(ctx, key, cpu, ctx.getString(R.string.voice_backend_cpu_fallback))
+                }
+                throw EngineException(ctx.getString(R.string.voice_error_qnn_crashed))
+            }
+            guard.arm()
+            try {
+                val engine = load(ctx, key, key.model, ctx.getString(R.string.voice_backend_npu))
+                // The first inference sets up the graph on the DSP: it is the other place where
+                // QNN fails fatally, and doing it now keeps that latency out of the first sentence.
+                try {
+                    engine.recognize(FloatArray(VoiceProtocol.SAMPLE_RATE / 2))
+                } catch (e: Throwable) {
+                    engine.release()
+                    throw e
+                }
+                return engine
+            } finally {
+                // only reached if the process survived; an exception (missing files, wrong SoC)
+                // is reported normally and doesn't disable the NPU
+                guard.disarm()
+            }
+        }
+
+        private fun load(ctx: Context, key: Key, model: SpeechModel, backendName: String): VoiceEngine {
             val dir = VoiceModelManager.modelDir(ctx, model)
             val missing = model.requiredFiles.filterNot { File(dir, it).isFile }
             if (missing.isNotEmpty()) {
@@ -120,7 +162,7 @@ class VoiceEngine private constructor(
             }
             val elapsed = SystemClock.elapsedRealtime() - start
             Log.i(TAG, "Loaded $model in ${elapsed}ms")
-            return VoiceEngine(key, recognizer, elapsed)
+            return VoiceEngine(key, model, recognizer, elapsed, backendName)
         }
 
         private fun checkQnnUsable(ctx: Context) {
@@ -189,4 +231,51 @@ class VoiceEngine private constructor(
 
         const val VAD_WINDOW = 512
     }
+}
+
+/**
+ * Remembers that loading the NPU model killed the `:voice` process. QNN reports fatal errors
+ * (no access to the DSP, a context binary that doesn't match the runtime, ...) with exit(), so
+ * there is no exception to catch: a marker file is written before loading and deleted after it,
+ * and if it is still there next time, the previous attempt never returned.
+ *
+ * The marker holds the APK's install time, so an app update (possibly with other QNN
+ * libraries) tries the NPU again. One tiny write per model load, which happens rarely: the
+ * loaded model is kept in the cached process.
+ */
+internal class QnnCrashGuard(ctx: Context) {
+    private val file = File(ctx.noBackupFilesDir, "voice-qnn-loading")
+
+    private val stamp: String = try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).lastUpdateTime.toString()
+    } catch (_: Exception) {
+        "0"
+    }
+
+    fun crashedBefore(): Boolean {
+        if (!file.exists()) return false
+        val content = try {
+            file.readText()
+        } catch (_: IOException) {
+            ""
+        }
+        if (content == stamp) return true
+        // left behind by another version of the app
+        file.delete()
+        return false
+    }
+
+    fun arm() {
+        try {
+            file.writeText(stamp)
+        } catch (e: IOException) {
+            Log.w("QnnCrashGuard", "Cannot write marker", e)
+        }
+    }
+
+    fun disarm() {
+        file.delete()
+    }
+
+    fun clear() = disarm()
 }

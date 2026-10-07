@@ -38,6 +38,15 @@ object VoiceProtocol {
     const val KEY_ITN = "itn"
     const val KEY_PARTIAL = "partial"
     const val KEY_SILENCE_MS = "silence_ms"
+
+    /** MSG_START: stop the session after this much audio without speech, 0 = never */
+    const val KEY_IDLE_STOP_MS = "idle_stop_ms"
+
+    /** MSG_SELF_TEST: retry the NPU even if its last initialization crashed the process */
+    const val KEY_FORCE_QNN = "force_qnn"
+
+    /** EVT_DONE: the session ended by itself because nobody spoke for [KEY_IDLE_STOP_MS] */
+    const val KEY_AUTO_STOPPED = "auto_stopped"
     const val KEY_PCM = "pcm"
     const val KEY_TEXT = "text"
     const val KEY_MESSAGE = "message"

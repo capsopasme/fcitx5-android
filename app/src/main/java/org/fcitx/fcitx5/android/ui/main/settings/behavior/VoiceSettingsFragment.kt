@@ -4,6 +4,7 @@
  */
 package org.fcitx.fcitx5.android.ui.main.settings.behavior
 
+import android.content.ActivityNotFoundException
 import android.os.Build
 import android.os.Bundle
 import android.text.format.Formatter
@@ -93,7 +94,11 @@ class VoiceSettingsFragment : ManagedPreferenceFragment(AppPrefs.getInstance().v
         }
         importPref = Preference(ctx).apply {
             setup(getString(R.string.voice_import_archive), getString(R.string.voice_import_archive_summary)) {
-                importLauncher.launch(arrayOf("*/*"))
+                try {
+                    importLauncher.launch(arrayOf("*/*"))
+                } catch (_: ActivityNotFoundException) {
+                    ctx.toast(getString(R.string.voice_import_no_picker))
+                }
             }
         }
         models.addPreference(importPref!!)

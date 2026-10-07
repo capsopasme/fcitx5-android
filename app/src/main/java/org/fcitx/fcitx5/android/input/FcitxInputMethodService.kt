@@ -408,6 +408,21 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         }
     }
 
+    /**
+     * Return key for panels that don't go through fcitx (voice input): performs the editor
+     * action ("search", "send", ...) exactly like the keyboard's return key does.
+     */
+    fun sendReturnFromPanel() {
+        if (currentInputConnection == null || currentInputEditorInfo == null) return
+        handleReturnKey()
+    }
+
+    /** Backspace for panels that don't go through fcitx (voice input), like the keyboard's */
+    fun sendBackspaceFromPanel() {
+        if (currentInputConnection == null || currentInputEditorInfo == null) return
+        handleBackspaceKey()
+    }
+
     private fun handleArrowKey(keyCode: Int) {
         val type = currentInputEditorInfo.inputType and InputType.TYPE_MASK_CLASS
         val variation = currentInputEditorInfo.inputType and InputType.TYPE_MASK_VARIATION

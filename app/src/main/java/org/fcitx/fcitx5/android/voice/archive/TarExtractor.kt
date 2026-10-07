@@ -100,7 +100,8 @@ object TarExtractor {
             val isFile = type == '0' || type == '\u0000' || type == '7'
             val isDir = type == '5' || (isFile && name.endsWith("/"))
             val target = File(canonicalDest, name).canonicalFile
-            if (!target.path.startsWith(canonicalDest.path)) {
+            // compare with the trailing separator: "dest-other/x" must not pass as inside "dest"
+            if (target != canonicalDest && !target.path.startsWith(canonicalDest.path + File.separator)) {
                 throw IOException("Illegal path in archive: $name")
             }
             when {

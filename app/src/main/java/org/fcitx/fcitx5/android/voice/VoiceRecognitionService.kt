@@ -97,6 +97,8 @@ class VoiceRecognitionService : Service() {
         val partial: Boolean,
         /** force-cut speech longer than this, see [VoiceEngine.createVad] */
         val maxSegmentSamples: Int,
+        /** end the session after this much audio without a recognized sentence, 0 = never */
+        val idleStopSamples: Int,
     ) {
         val buffer = FloatRingBuffer()
 
@@ -112,6 +114,14 @@ class VoiceRecognitionService : Service() {
 
         /** cost of the last partial decode, used to throttle partials */
         var lastPartialCost = 0L
+
+        /**
+         * Audio received since the session started or since the last sentence that produced
+         * text. Counted in audio time, so a slow model load doesn't count, and not reset by
+         * VAD alone: steady background noise that VAD takes for speech (and that decodes to
+         * nothing) must not keep the microphone open forever.
+         */
+        var samplesWithoutText = 0
     }
 
     private var session: Session? = null
@@ -135,11 +145,17 @@ class VoiceRecognitionService : Service() {
         data.getBoolean(P.KEY_ITN, true),
     )
 
-    private fun ensureEngine(key: VoiceEngine.Key, replyTo: Messenger?, id: Int): VoiceEngine {
-        cachedEngine?.let { if (it.key == key) return it }
+    /**
+     * @param forceQnn retry the NPU even if its last initialization crashed the process, and
+     * replace a CPU engine that was loaded as a fallback for it
+     */
+    private fun ensureEngine(
+        key: VoiceEngine.Key, replyTo: Messenger?, id: Int, forceQnn: Boolean = false
+    ): VoiceEngine {
+        cachedEngine?.let { if (it.key == key && !(forceQnn && it.isFallback)) return it }
         reply(replyTo, P.EVT_LOADING, id)
         releaseEngine()
-        return VoiceEngine.create(this, key).also { cachedEngine = it }
+        return VoiceEngine.create(this, key, forceQnn).also { cachedEngine = it }
     }
 
     private fun ensureVad(model: SpeechModel, silenceMs: Int): Vad {
@@ -159,8 +175,8 @@ class VoiceRecognitionService : Service() {
         if (session != null) return
         val key = parseKey(msg.data)
         val t0 = SystemClock.elapsedRealtime()
-        ensureEngine(key, null, 0)
-        ensureVad(key.model, msg.data.getInt(P.KEY_SILENCE_MS, 600))
+        val engine = ensureEngine(key, null, 0)
+        ensureVad(engine.model, msg.data.getInt(P.KEY_SILENCE_MS, 600))
         Log.d(TAG, "preload $key done in ${SystemClock.elapsedRealtime() - t0}ms")
     }
 
@@ -171,11 +187,14 @@ class VoiceRecognitionService : Service() {
         preemptSession(msg.arg1, msg.replyTo)
         resetSession()
         val engine = ensureEngine(key, msg.replyTo, msg.arg1)
-        ensureVad(key.model, silenceMs).reset()
+        // the engine's own model: differs from key.model when the NPU fell back to the CPU
+        ensureVad(engine.model, silenceMs).reset()
         session = Session(
             msg.arg1, msg.replyTo,
-            partial = data.getBoolean(P.KEY_PARTIAL, true) && key.model.fastEnoughForPartial,
-            maxSegmentSamples = (key.model.maxSegmentSeconds * P.SAMPLE_RATE).toInt(),
+            partial = data.getBoolean(P.KEY_PARTIAL, true) && engine.model.fastEnoughForPartial,
+            maxSegmentSamples = (engine.model.maxSegmentSeconds * P.SAMPLE_RATE).toInt(),
+            idleStopSamples = (data.getInt(P.KEY_IDLE_STOP_MS, 0).coerceAtLeast(0).toLong() *
+                    P.SAMPLE_RATE / 1000).toInt(),
         )
         reply(msg.replyTo, P.EVT_READY, msg.arg1) {
             putString(P.KEY_BACKEND, engine.backendName)
@@ -209,6 +228,17 @@ class VoiceRecognitionService : Service() {
             }
             // drain per window, so that the bookkeeping below matches what VAD has emitted
             if (!vad.empty()) drainSegments(s, engine, vad)
+            s.samplesWithoutText += VoiceEngine.VAD_WINDOW
+            if (s.idleStopSamples > 0 && !s.speechStarted &&
+                s.samplesWithoutText >= s.idleStopSamples
+            ) {
+                // Nobody has said anything for a while: release the microphone instead of
+                // recording (and running VAD) until the keyboard is closed. Checked per window,
+                // so that it also catches the short gap after a force-cut of endless noise.
+                Log.d(TAG, "no speech for ${s.samplesWithoutText / P.SAMPLE_RATE}s, stopping")
+                stop(s.id, cancel = false, autoStopped = true)
+                return
+            }
         }
 
         if (s.speechStarted && s.partial) {
@@ -248,6 +278,7 @@ class VoiceRecognitionService : Service() {
             // never log the recognized text itself: logcat is readable by other tools
             Log.d(TAG, "segment ${segment.samples.size} samples -> ${text.length} chars in ${cost}ms")
             if (text.isNotEmpty()) {
+                s.samplesWithoutText = 0
                 reply(s.replyTo, P.EVT_FINAL, s.id) {
                     putString(P.KEY_TEXT, text)
                     putLong(P.KEY_DECODE_MS, cost)
@@ -264,7 +295,7 @@ class VoiceRecognitionService : Service() {
         }
     }
 
-    private fun stop(id: Int, cancel: Boolean) {
+    private fun stop(id: Int, cancel: Boolean, autoStopped: Boolean = false) {
         val s = session ?: return
         if (s.id != id) return
         val vad = vad
@@ -280,7 +311,9 @@ class VoiceRecognitionService : Service() {
             drainSegments(s, engine, vad)
         }
         vad?.reset()
-        reply(s.replyTo, P.EVT_DONE, s.id)
+        reply(s.replyTo, P.EVT_DONE, s.id) {
+            if (autoStopped) putBoolean(P.KEY_AUTO_STOPPED, true)
+        }
         session = null
     }
 
@@ -306,8 +339,10 @@ class VoiceRecognitionService : Service() {
         val key = parseKey(msg.data)
         preemptSession(msg.arg1, msg.replyTo)
         resetSession()
-        val engine = ensureEngine(key, msg.replyTo, msg.arg1)
-        val wav = File(VoiceModelManager.modelDir(this, key.model), key.model.testWav)
+        val engine = ensureEngine(
+            key, msg.replyTo, msg.arg1, forceQnn = msg.data.getBoolean(P.KEY_FORCE_QNN, false)
+        )
+        val wav = File(VoiceModelManager.modelDir(this, engine.model), engine.model.testWav)
         val samples = if (wav.isFile) WavReader.readMono16k(wav) else null
         if (samples == null) {
             reply(msg.replyTo, P.EVT_ERROR, msg.arg1) {

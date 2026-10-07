@@ -17,14 +17,16 @@ import kotlin.math.sqrt
 
 /**
  * Captures 16 kHz mono microphone audio on a background thread.
- * [onAudio] receives float samples in [-1, 1] and the chunk's RMS level, on the capture thread.
+ * [onAudio] receives float samples in [-1, 1], the chunk's RMS level and the token passed to
+ * [start], on the capture thread. The token lets the receiver tell which recording a chunk
+ * belongs to: the last chunk of a stopped recording can arrive after a new one has started.
  *
  * Every [start] gets its own worker with its own running flag: a quick stop() + start()
  * can never leave two threads feeding the same session, and the old thread's cleanup
  * can never stop the new one.
  */
 class AudioCapture(
-    private val onAudio: (pcm: FloatArray, rms: Float) -> Unit,
+    private val onAudio: (pcm: FloatArray, rms: Float, token: Int) -> Unit,
     private val onFailure: (Throwable) -> Unit,
 ) {
     private class Worker {
@@ -42,7 +44,7 @@ class AudioCapture(
     val isRunning get() = current?.running == true
 
     @SuppressLint("MissingPermission")
-    fun start(context: Context): Boolean {
+    fun start(context: Context, token: Int): Boolean {
         if (isRunning) return true
         if (!hasPermission(context)) return false
         val rate = VoiceProtocol.SAMPLE_RATE
@@ -99,7 +101,7 @@ class AudioCapture(
                         sum += v * v
                     }
                     // also deliver the chunk read right after stop(): it is the tail of the speech
-                    onAudio(pcm, sqrt(sum / n).toFloat())
+                    onAudio(pcm, sqrt(sum / n).toFloat(), token)
                 }
             } catch (e: Throwable) {
                 Log.w("AudioCapture", "capture failed", e)

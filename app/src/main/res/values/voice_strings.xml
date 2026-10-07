@@ -13,6 +13,7 @@
     <string name="voice_partial_results">Show text while speaking</string>
     <string name="voice_partial_results_summary">Re-recognize the current sentence while you speak. Final text is committed when you pause.</string>
     <string name="voice_auto_start">Start listening when the panel opens</string>
+    <string name="voice_idle_stop">Stop listening after this long without speech</string>
     <string name="voice_silence_duration">Pause length that ends a sentence</string>
     <string name="voice_auto_space">Automatic spaces between English words</string>
     <string name="voice_auto_space_summary">Insert a space when English text follows English text</string>
@@ -33,6 +34,10 @@
     <string name="voice_error_init_failed">Failed to load the model. %1$s</string>
     <string name="voice_error_qnn_soc">The NPU model is built for Snapdragon 8 Gen 3 (SM8650), this device is %1$s. Please use a CPU model.</string>
     <string name="voice_error_qnn_libs">QNN runtime libraries are not packaged in this build: %1$s</string>
+    <string name="voice_error_qnn_crashed">Loading the NPU model crashed the recognizer last time, so the NPU is paused. Download \"SenseVoice · CPU\" as a fallback, or run the self test of the NPU model in settings to try again.</string>
+    <string name="voice_backend_npu">QNN HTP (NPU)</string>
+    <string name="voice_backend_cpu">CPU</string>
+    <string name="voice_backend_cpu_fallback">CPU (NPU failed to load, fell back)</string>
     <string name="voice_error_no_test_wav">No test audio found in the model folder</string>
     <string name="voice_error_interrupted">Interrupted by another voice session (e.g. the self test)</string>
     <string name="voice_permission_granted">Microphone permission granted</string>
@@ -47,9 +52,10 @@
     <string name="voice_status_loading">Loading model… (only slow the first time)</string>
     <string name="voice_status_listening">Listening · %1$s</string>
     <string name="voice_status_finishing">Recognizing…</string>
+    <string name="voice_status_auto_stopped">Stopped listening after a while without speech</string>
     <string name="voice_status_idle">Tap the microphone to speak</string>
     <string name="voice_status_error">Error: %1$s</string>
-    <string name="voice_status_crashed">The recognizer process crashed (NPU initialization failed?). Try the CPU model.</string>
+    <string name="voice_status_crashed">The recognizer process crashed, the keyboard is fine. If the NPU failed to load, the CPU model (\"SenseVoice · CPU\", if downloaded) is used next time.</string>
     <string name="voice_status_dropped_editor_changed">The input field changed before recognition finished, the last sentence was not inserted</string>
     <string name="voice_status_need_permission">Microphone permission is required</string>
     <string name="voice_status_need_model">Model not installed: %1$s</string>
@@ -77,6 +83,7 @@
     <string name="voice_delete_confirm">Delete this model?</string>
     <string name="voice_import_archive">Import model from file</string>
     <string name="voice_import_archive_summary">Pick a sherpa-onnx .tar.bz2 model archive downloaded elsewhere</string>
+    <string name="voice_import_no_picker">No file picker available on this device</string>
     <string name="voice_import_done">Imported %1$s</string>
     <string name="voice_import_failed">Import failed: %1$s</string>
     <string name="voice_download_prefix">Download mirror prefix</string>

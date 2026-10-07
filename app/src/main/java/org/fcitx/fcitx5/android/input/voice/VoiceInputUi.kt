@@ -164,14 +164,37 @@ class VoiceInputUi(val ctx: Context, private val theme: Theme) {
         micButton.contentDescription = ctx.getString(
             if (state == MicState.Idle) R.string.voice_start else R.string.voice_stop
         )
-        if (state != MicState.Listening) setLevel(0f)
+        if (state != MicState.Listening) setLevelStep(0)
     }
 
-    /** @param rms microphone level, roughly 0..0.3 */
-    fun setLevel(rms: Float) {
-        // map to 0.8 .. 1.0 with a bit of compression
-        val v = (kotlin.math.sqrt(rms.coerceIn(0f, 0.25f) / 0.25f) * 0.2f) + 0.8f
-        halo.animate().scaleX(v).scaleY(v).setDuration(90).start()
+    /**
+     * Show the microphone level as one of a few halo sizes. Set directly instead of animated:
+     * an animation per audio chunk (10/s) kept the panel redrawing at the display's full refresh
+     * rate for as long as the microphone was open, even in silence. Now a frame is drawn only
+     * when the level actually moves to another step.
+     *
+     * @param step from [levelStep]
+     */
+    fun setLevelStep(step: Int) {
+        val v = 0.8f + 0.2f * step.coerceIn(0, LEVEL_STEPS) / LEVEL_STEPS
+        if (halo.scaleX == v && halo.scaleY == v) return
+        halo.scaleX = v
+        halo.scaleY = v
+    }
+
+    companion object {
+        private const val LEVEL_STEPS = 6
+
+        /** below this RMS the room is considered silent, so background noise doesn't flicker */
+        private const val NOISE_FLOOR = 0.012f
+
+        /** @param rms microphone level, roughly 0..0.3; @return 0..[LEVEL_STEPS] */
+        fun levelStep(rms: Float): Int {
+            if (rms < NOISE_FLOOR) return 0
+            // a bit of compression, so normal speech covers most of the range
+            val v = kotlin.math.sqrt(rms.coerceAtMost(0.25f) / 0.25f)
+            return kotlin.math.round(v * LEVEL_STEPS).toInt().coerceIn(1, LEVEL_STEPS)
+        }
     }
 
     /** already committed text is dimmed, the sentence still being recognized is highlighted */
