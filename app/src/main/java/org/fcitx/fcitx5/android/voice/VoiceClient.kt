@@ -20,7 +20,7 @@ import org.fcitx.fcitx5.android.voice.VoiceProtocol as P
 
 /**
  * IME side of the voice recognizer. Binds to [VoiceRecognitionService] in the `:voice` process.
- * All callbacks are delivered on the main thread.
+ * Must be used from the main thread only; all callbacks are delivered on the main thread.
  */
 class VoiceClient(private val context: Context, private val listener: Listener) {
 
@@ -30,21 +30,18 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
         fun onPartial(text: String) {}
         fun onFinal(text: String) {}
         fun onError(message: String) {}
-        fun onDone() {}
+
+        /** @param autoStopped the recognizer ended the session because nobody spoke for a while */
+        fun onDone(autoStopped: Boolean) {}
         fun onTestResult(text: String, backend: String, loadMillis: Long, decodeMillis: Long, audioMillis: Long) {}
         /** the recognizer process died, most likely a native crash during model init */
         fun onServiceCrashed() {}
     }
 
-    @Volatile
     private var service: Messenger? = null
-
-    @Volatile
     private var bound = false
     private val pending = ArrayDeque<Message>()
     private val mainHandler = Handler(Looper.getMainLooper())
-
-    @Volatile
     private var activeSession = 0
 
     private val incoming = Messenger(Handler(Looper.getMainLooper()) { msg ->
@@ -61,29 +58,39 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
             pending.clear()
-            if (activeSession != 0) {
-                activeSession = 0
-                listener.onServiceCrashed()
-            }
+            val crashedSession = activeSession != 0
+            activeSession = 0
+            // The recognizer process died (a native crash or exit() during model loading, or
+            // killed by the system). While the binding exists the system would restart it right
+            // away, an empty process that only costs memory and a cold start. Let it go, the
+            // next start() / preload() binds again.
+            unbind()
+            if (crashedSession) listener.onServiceCrashed()
         }
 
         override fun onBindingDied(name: ComponentName?) {
             onServiceDisconnected(name)
-            if (bound) {
-                // re-bind for next time
-                context.unbindService(this)
-                bound = false
-            }
         }
     }
 
     fun bind() {
         if (bound) return
-        bound = context.bindService(
-            Intent(context, VoiceRecognitionService::class.java),
-            connection,
-            Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT
-        )
+        bound = try {
+            context.bindService(
+                Intent(context, VoiceRecognitionService::class.java),
+                connection,
+                Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT
+            )
+        } catch (_: SecurityException) {
+            false
+        }
+        if (!bound) {
+            // the connection is registered even when binding fails (e.g. before the first unlock)
+            try {
+                context.unbindService(connection)
+            } catch (_: IllegalArgumentException) {
+            }
+        }
     }
 
     fun unbind() {
@@ -115,14 +122,16 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
     val currentSession: Int
         get() = activeSession
 
+    /** @return the new session id, 0 if the recognizer can't be reached */
     fun start(
         model: SpeechModel,
         language: SpeechLanguage,
         itn: Boolean,
         partial: Boolean,
         silenceMs: Int,
-    ) {
-        if (!bindOrFail()) return
+        idleStopMs: Int,
+    ): Int {
+        if (!bindOrFail()) return 0
         activeSession = nextSessionId()
         post(P.MSG_START) {
             putString(P.KEY_MODEL, model.name)
@@ -130,25 +139,24 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
             putBoolean(P.KEY_ITN, itn)
             putBoolean(P.KEY_PARTIAL, partial)
             putInt(P.KEY_SILENCE_MS, silenceMs)
+            putInt(P.KEY_IDLE_STOP_MS, idleStopMs)
         }
+        return activeSession
     }
 
-    /** May be called from any thread */
-    fun sendAudio(pcm: FloatArray) {
-        val id = activeSession
-        if (id == 0 || !bound) return
+    /**
+     * Main thread only. Every message to the service goes through the same queue in the same
+     * order: sending audio straight from the capture thread could overtake MSG_START (still
+     * pending while the service connects) or audio queued before it, and the service would drop
+     * the first chunks of a sentence or receive them out of order.
+     *
+     * @param id session the audio was recorded for; audio of an older session is dropped
+     */
+    fun sendAudio(pcm: FloatArray, id: Int) {
+        if (id == 0 || id != activeSession || !bound) return
         val m = Message.obtain(null, P.MSG_AUDIO, id, 0)
         m.data = Bundle().apply { putFloatArray(P.KEY_PCM, pcm) }
-        val s = service
-        if (s == null) {
-            // still connecting, queue it on the main thread
-            mainHandler.post { pendingOrSend(m) }
-        } else {
-            try {
-                s.send(m)
-            } catch (_: RemoteException) {
-            }
-        }
+        pendingOrSend(m)
     }
 
     private fun pendingOrSend(m: Message) {
@@ -195,6 +203,7 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
         pendingOrSend(m)
     }
 
+    /** An explicit self test also retries the NPU after its initialization crashed once */
     fun selfTest(model: SpeechModel, language: SpeechLanguage, itn: Boolean) {
         if (!bindOrFail()) return
         activeSession = nextSessionId()
@@ -202,6 +211,7 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
             putString(P.KEY_MODEL, model.name)
             putString(P.KEY_LANGUAGE, language.name)
             putBoolean(P.KEY_ITN, itn)
+            putBoolean(P.KEY_FORCE_QNN, true)
         }
     }
 
@@ -251,7 +261,7 @@ class VoiceClient(private val context: Context, private val listener: Listener) 
             }
             P.EVT_DONE -> {
                 activeSession = 0
-                listener.onDone()
+                listener.onDone(d.getBoolean(P.KEY_AUTO_STOPPED, false))
             }
             P.EVT_TEST_RESULT -> {
                 activeSession = 0

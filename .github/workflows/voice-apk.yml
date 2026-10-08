@@ -16,12 +16,18 @@ on:
         description: "Also build these plugins with the same signature, space separated (e.g. rime anthy). Leave empty for none."
         required: false
         default: ""
+      release_tag:
+        description: "Also attach the APKs to a draft GitHub release with this name (e.g. voice-2026-10-07). Leave empty for none."
+        required: false
+        default: ""
   push:
     branches: [voice-input]
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - name: Fetch source code
         uses: actions/checkout@v7
@@ -125,3 +131,20 @@ jobs:
             app/build/outputs/apk/release/*.apk
             plugin-apks/*.apk
           if-no-files-found: error
+
+      # A draft: no git tag is created (it would change `git describe`, i.e. the versionName of
+      # later builds), and nothing is public until the release is published by hand.
+      - name: Attach APKs to a draft release
+        if: ${{ github.event.inputs.release_tag != '' && github.event.inputs.release_tag != null }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          shopt -s nullglob
+          files=(app/build/outputs/apk/release/*.apk plugin-apks/*.apk)
+          gh release create "$TAG" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --draft \
+            --title "$TAG" \
+            --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7} (arm64-v8a, voice input)."

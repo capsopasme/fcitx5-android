@@ -26,6 +26,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.fcitx.fcitx5.android.FcitxApplication
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.core.CapabilityFlag
 import org.fcitx.fcitx5.android.core.CapabilityFlags
@@ -154,9 +155,18 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
     /** never offer dictation in password fields: the transcript is shown on screen */
     private var isPasswordField = false
 
+    /**
+     * Also hidden before the first unlock after boot (direct boot): the models live in
+     * credential-encrypted storage, and neither the recognizer service nor the settings it
+     * points to can run yet.
+     */
+    private fun builtinVoiceButtonVisible() =
+        builtinVoiceButton.getValue() && !isPasswordField &&
+                !FcitxApplication.getInstance().isDirectBootMode
+
     private fun updateBuiltinVoiceButton() {
         idleUi.buttonsUi.voiceButton.visibility =
-            if (builtinVoiceButton.getValue() && !isPasswordField) View.VISIBLE else View.GONE
+            if (builtinVoiceButtonVisible()) View.VISIBLE else View.GONE
     }
 
     @Keep
@@ -321,7 +331,7 @@ class KawaiiBarComponent : UniqueViewComponent<KawaiiBarComponent, FrameLayout>(
                     windowManager.attachWindow(VoiceInputWindow())
                 }
                 voiceButton.visibility =
-                    if (builtinVoiceButton.getValue() && !isPasswordField) View.VISIBLE else View.GONE
+                    if (builtinVoiceButtonVisible()) View.VISIBLE else View.GONE
                 moreButton.setOnClickListener {
                     windowManager.attachWindow(StatusAreaWindow())
                 }

@@ -7,7 +7,6 @@ package org.fcitx.fcitx5.android.input.voice
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.view.KeyEvent
 import android.view.View
 import org.fcitx.fcitx5.android.R
 import org.fcitx.fcitx5.android.data.prefs.AppPrefs
@@ -54,14 +53,21 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
         VoiceInputUi(context, theme).apply {
             micButton.setOnClickListener { toggle() }
             backspaceButton.setOnClickListener {
-                service.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+                service.sendBackspaceFromPanel()
                 if (committed.isNotEmpty()) {
-                    committed.setLength(committed.length - 1)
+                    // drop a whole code point, never half of a surrogate pair
+                    val end = committed.length
+                    val start = if (end >= 2 && Character.isLowSurrogate(committed[end - 1]) &&
+                        Character.isHighSurrogate(committed[end - 2])
+                    ) end - 2 else end - 1
+                    committed.setLength(start)
                     showTranscript(committed, partial)
                 }
             }
             enterButton.setOnClickListener {
-                service.sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
+                // same as the keyboard's return key: "search" / "send" / "go" where the editor
+                // asks for an action, a plain Enter otherwise
+                service.sendReturnFromPanel()
             }
             onWindowVisibilityChanged = { v ->
                 visible = v
@@ -90,6 +96,8 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
         override fun onReady(backend: String, loadMillis: Long) {
             if (state != State.Loading && state != State.Listening) return
             state = State.Listening
+            // levels measured while loading weren't shown, let the next chunk update the halo
+            shownLevel = -1
             ui.setMicState(VoiceInputUi.MicState.Listening)
             ui.statusText.text = context.getString(R.string.voice_status_listening, backend)
         }
@@ -128,15 +136,20 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
             if (!attached || !visible) scheduleIdleUnbind()
         }
 
-        override fun onDone() {
+        override fun onDone(autoStopped: Boolean) {
             capture.stop()
             toIdle()
             // keep the "not inserted" notice visible instead of replacing it
-            if (attached && !droppedResult) ui.statusText.setText(R.string.voice_status_idle)
+            if (attached && !droppedResult) {
+                ui.statusText.setText(
+                    if (autoStopped) R.string.voice_status_auto_stopped else R.string.voice_status_idle
+                )
+            }
             if (!attached || !visible) scheduleIdleUnbind()
         }
 
         override fun onServiceCrashed() {
+            // the client has already dropped its binding, nothing to unbind later
             capture.stop()
             toIdle()
             ui.statusText.setText(R.string.voice_status_crashed)
@@ -146,11 +159,22 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
 
     private val client: VoiceClient by lazy { VoiceClient(context, clientListener) }
 
+    /** last level shown by the halo, see [VoiceInputUi.levelStep] */
+    @Volatile
+    private var shownLevel = -1
+
     private val capture: AudioCapture by lazy {
         AudioCapture(
-            onAudio = { pcm, rms ->
-                client.sendAudio(pcm)
-                mainHandler.post { if (state == State.Listening) ui.setLevel(rms) }
+            onAudio = { pcm, rms, session ->
+                // one main thread hop per chunk (10/s) for both: audio has to be queued in order
+                // with MSG_START / MSG_STOP anyway, see VoiceClient.sendAudio
+                val level = VoiceInputUi.levelStep(rms)
+                val levelChanged = level != shownLevel
+                shownLevel = level
+                mainHandler.post {
+                    client.sendAudio(pcm, session)
+                    if (levelChanged && state == State.Listening) ui.setLevelStep(level)
+                }
             },
             onFailure = { e ->
                 mainHandler.post {
@@ -272,15 +296,19 @@ class VoiceInputWindow : InputWindow.ExtendedInputWindow<VoiceInputWindow>() {
         state = State.Loading
         ui.setMicState(VoiceInputUi.MicState.Loading)
         ui.statusText.setText(R.string.voice_status_starting)
-        client.start(
+        val session = client.start(
             model = model,
             language = prefs.language.getValue(),
             itn = prefs.itn.getValue(),
             partial = prefs.partialResults.getValue(),
             silenceMs = prefs.silenceMillis.getValue(),
+            idleStopMs = prefs.idleStopSeconds.getValue() * 1000,
         )
+        // the recognizer can't be reached: its error is already on the way, don't record at all
+        if (session == 0) return
+        shownLevel = -1
         // audio recorded while the model is loading is queued, nothing gets lost
-        if (!capture.start(context)) {
+        if (!capture.start(context, session)) {
             client.cancel()
             toIdle()
         }

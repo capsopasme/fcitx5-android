@@ -390,6 +390,11 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
         val silenceMillis = int(
             R.string.voice_silence_duration, "voice_silence_ms", 600, 200, 2000, "ms", 100
         )
+
+        /** stop listening when nothing has been recognized for this long, saves the battery */
+        val idleStopSeconds = int(
+            R.string.voice_idle_stop, "voice_idle_stop_s", 20, 5, 120, "s", 5
+        )
         val autoSpace = switch(
             R.string.voice_auto_space, "voice_auto_space", true, R.string.voice_auto_space_summary
         )
